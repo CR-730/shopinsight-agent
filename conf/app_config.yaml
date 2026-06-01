@@ -1,0 +1,52 @@
+logging:
+  file:
+    enable: true
+    level: INFO
+    path: logs
+    rotation: "10 MB"
+    retention: "7 days"
+  console:
+    enable: true
+    level: INFO
+
+db_meta:
+  host: localhost
+  port: 3307
+  user: cr730
+  password: cr730123
+  database: meta
+
+db_dw:
+  host: localhost
+  port: 3307
+  user: cr730
+  password: cr730123
+  database: dw
+
+qdrant:
+  host: localhost
+  port: 6333
+  embedding_size: 4096
+
+es:
+  host: localhost
+  port: 9200
+  index_name: data_agent
+
+agent:
+  max_sql_correction_attempts: 2
+  embedding_timeout_seconds: 30
+  retrieval_timeout_seconds: 30
+  value_hybrid_es_weight: 1.2
+  value_hybrid_vector_weight: 1.0
+  value_vector_score_threshold: 0.65
+
+metadata_build:
+  enabled: false
+  config_path: conf/meta_config.yaml
+  poll_interval_seconds: 300
+  build_on_start: false
+
+cost:
+  currency: CNY
+  embedding_per_1m_tokens: 0.0

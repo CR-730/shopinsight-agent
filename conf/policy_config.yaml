@@ -1,0 +1,28 @@
+pre_rag:
+  rule_patterns:
+    prompt_injection: "忽略(之前|以上|所有).*规则|绕过|无视规则|不要遵守"
+    dangerous_sql: "\\b(drop|delete|truncate|update|insert|alter)\\b|删除表|清空表|修改数据"
+    privacy_or_detail: "手机号|手机号码|密码|地址|所有用户|全部用户|用户明细|订单明细|导出所有"
+    system_leak: "系统提示词|system prompt|密钥|api[_-]?key|配置文件|\\.env|表结构"
+
+semantic:
+  enum_suffixes: [地区, 区域, 大区, 品牌, 品类, 商品]
+  temporal_fields: [时间, 日期, 年, 年份, 月, 月份, 季度]
+  enum_aliases:
+    北方: 华北
+    北方区域: 华北
+  generic_enum_values: [按, 各, 每个, 所有, 全部, 不同, 大区, 地区, 区域, 商品, 品类, 品牌]
+  derived_metric_columns:
+    销量: fact_order.order_quantity
+    数量: fact_order.order_quantity
+    订单数量: fact_order.order_quantity
+    销售数量: fact_order.order_quantity
+
+sql:
+  deny_keywords: [delete, update, insert, drop, truncate, alter, create, grant, revoke]
+  sensitive_columns:
+    - dim_customer.customer_id
+    - dim_customer.customer_name
+    - fact_order.customer_id
+  sensitive_column_names: [phone, mobile, password, address, customer_id, customer_name]
+  allowed_metric_aliases: [销售额, 成交额, 销售总额, 订单金额, 销量, 订单数量]
