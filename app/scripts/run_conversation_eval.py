@@ -11,7 +11,6 @@ from typing import Any
 
 from langchain_core.embeddings import Embeddings
 
-from app.agent.memory import rewrite_followup_query
 from app.clients.embedding_client_manager import embedding_client_manager
 from app.clients.es_client_manager import es_client_manager
 from app.clients.mysql_client_manager import (
@@ -202,13 +201,15 @@ class MockConversationQueryService:
                 user_id, query
             )
         snapshot = await self.memory_repository.get_snapshot(conversation_id, user_id)
-        rewritten_query = rewrite_followup_query(query, snapshot)
+        rewrite_result = _mock_rewrite_result(query, snapshot)
+        rewritten_query = rewrite_result["standalone_query"]
         trace = _mock_trace(rewritten_query)
         yield _sse(
             {
                 "type": "conversation",
                 "conversation_id": conversation_id,
                 "rewritten_query": rewritten_query,
+                "rewrite": rewrite_result,
             }
         )
         if trace.get("final_answer") is not None and not trace.get("error"):
@@ -246,6 +247,34 @@ def _mock_trace(query: str) -> dict[str, Any]:
             "final_answer": None,
         }
     return {"blocked_by": "semantic_guard", "final_answer": None}
+
+
+def _mock_rewrite_result(
+    query: str, snapshot: dict[str, Any] | None
+) -> dict[str, Any]:
+    if snapshot is None and query.startswith(("那", "改成", "换成")):
+        return {
+            "mode": "needs_context",
+            "standalone_query": query,
+            "reason": "缺少上一轮会话上下文，无法解析追问",
+            "inherited_slots": {},
+            "overridden_slots": {},
+        }
+    if snapshot and "华东" in query:
+        return {
+            "mode": "rewritten",
+            "standalone_query": "统计华东地区 GMV",
+            "reason": "继承上一轮指标，覆盖地区",
+            "inherited_slots": {"metric": ["GMV"]},
+            "overridden_slots": {"filters": ["华东"]},
+        }
+    return {
+        "mode": "unchanged",
+        "standalone_query": query,
+        "reason": "完整问题或无需改写",
+        "inherited_slots": {},
+        "overridden_slots": {},
+    }
 
 
 def _sse(event: dict[str, Any]) -> str:

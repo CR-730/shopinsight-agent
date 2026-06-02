@@ -1,4 +1,4 @@
-- id: conv_metric_and_region_followup
+﻿- id: conv_metric_and_region_followup
   suite: regression
   difficulty: medium
   capabilities:
@@ -36,7 +36,7 @@
     - query: 那华东呢
       expected_conversation_id: same
       expected_rewritten:
-        mode: contextualized
+        mode: rewritten
         contains:
           - GMV
           - 华东
@@ -94,7 +94,7 @@
     - query: 那客单价呢
       expected_conversation_id: same
       expected_rewritten:
-        mode: contextualized
+        mode: rewritten
         contains:
           - 华北
           - 客单价
@@ -154,7 +154,7 @@
     - query: 那华东呢
       expected_conversation_id: same
       expected_rewritten:
-        mode: contextualized
+        mode: rewritten
         contains:
           - GMV
           - 华东
@@ -214,7 +214,7 @@
     - query: 改成华东
       expected_conversation_id: same
       expected_rewritten:
-        mode: contextualized
+        mode: rewritten
         contains:
           - GMV
           - 华东
@@ -341,7 +341,7 @@
     - query: 那华东呢
       expected_conversation_id: same
       expected_rewritten:
-        mode: contextualized
+        mode: rewritten
         contains:
           - GMV
           - 华东
@@ -411,7 +411,7 @@
     - query: 那客单价呢
       expected_conversation_id: same
       expected_rewritten:
-        mode: contextualized
+        mode: rewritten
         contains:
           - 华北
           - 客单价
@@ -465,7 +465,7 @@
       supplied_conversation_id: previous
       expected_conversation_id: new
       expected_rewritten:
-        mode: unchanged
+        mode: needs_context
         contains:
           - 那华东呢
         forbidden_contains:
@@ -517,7 +517,7 @@
         error: SQL 执行超时
       expected_conversation_id: same
       expected_rewritten:
-        mode: contextualized
+        mode: rewritten
         contains:
           - GMV
           - 华东
@@ -568,7 +568,7 @@
     - query: 那华东呢
       expected_conversation_id: same
       expected_rewritten:
-        mode: contextualized
+        mode: rewritten
         contains:
           - GMV
           - 华东
@@ -589,7 +589,7 @@
     - query: 换成客单价
       expected_conversation_id: same
       expected_rewritten:
-        mode: contextualized
+        mode: rewritten
         contains:
           - 华东
           - 客单价

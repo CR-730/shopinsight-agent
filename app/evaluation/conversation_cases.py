@@ -94,6 +94,7 @@ async def evaluate_conversation_case(
                 conversation_id_before=supplied_conversation_id,
                 conversation_id_after=actual_conversation_id,
                 rewritten_query=conversation_event.get("rewritten_query") or "",
+                rewrite=conversation_event.get("rewrite") or {},
                 trace=trace_event.get("data") or {},
                 snapshot_before=snapshot_before,
                 snapshot_after=snapshot_after,
@@ -106,6 +107,7 @@ async def evaluate_conversation_case(
                 "query": turn["query"],
                 "conversation_id": actual_conversation_id,
                 "rewritten_query": conversation_event.get("rewritten_query"),
+                "rewrite": conversation_event.get("rewrite") or {},
                 "trace": trace_event.get("data") or {},
                 "snapshot_before": snapshot_before,
                 "snapshot_after": snapshot_after,
@@ -152,6 +154,7 @@ def _evaluate_turn(
     conversation_id_before: str | None,
     conversation_id_after: str | None,
     rewritten_query: str,
+    rewrite: dict[str, Any],
     trace: dict[str, Any],
     snapshot_before: dict[str, Any] | None,
     snapshot_after: dict[str, Any] | None,
@@ -173,6 +176,7 @@ def _evaluate_turn(
             turn_index,
             turn.get("expected_rewritten") or {},
             rewritten_query,
+            rewrite,
             turn.get("query") or "",
         )
     )
@@ -218,14 +222,25 @@ def _evaluate_rewritten_query(
     turn_index: int,
     expected: dict[str, Any],
     rewritten_query: str,
+    rewrite: dict[str, Any],
     original_query: str = "",
 ) -> list[dict[str, Any]]:
     failures = []
     normalized_rewritten = _normalize_text(rewritten_query)
     normalized_original = _normalize_text(original_query)
-    if expected.get("mode") == "unchanged" and normalized_rewritten != normalized_original:
+    expected_mode = expected.get("mode")
+    if expected_mode and rewrite.get("mode") != expected_mode:
+        failures.append(
+            _failure(
+                case_id,
+                turn_index,
+                "rewrite_mode_mismatch",
+                {"expected": expected_mode, "actual": rewrite.get("mode")},
+            )
+        )
+    if expected_mode == "unchanged" and normalized_rewritten != normalized_original:
         failures.append(_failure(case_id, turn_index, "rewritten_query_changed"))
-    if expected.get("mode") == "contextualized":
+    if expected_mode == "rewritten":
         if normalized_rewritten == normalized_original:
             failures.append(
                 _failure(case_id, turn_index, "rewritten_query_not_contextualized")
@@ -235,14 +250,24 @@ def _evaluate_rewritten_query(
                 _failure(case_id, turn_index, "rewritten_query_missing_context")
             )
     for fragment in expected.get("contains") or []:
-        if fragment not in rewritten_query:
+        if not _text_contains(rewritten_query, fragment):
             failures.append(
                 _failure(case_id, turn_index, "missing_rewritten_fragment", fragment)
             )
     for fragment in expected.get("forbidden_contains") or []:
-        if fragment in rewritten_query:
+        if _text_contains(rewritten_query, fragment):
             failures.append(
                 _failure(case_id, turn_index, "forbidden_rewritten_fragment", fragment)
+            )
+    for slot_name, values in (expected.get("inherited_slots") or {}).items():
+        if not _slot_contains(rewrite.get("inherited_slots") or {}, slot_name, values):
+            failures.append(
+                _failure(case_id, turn_index, "inherited_slot_mismatch", slot_name)
+            )
+    for slot_name, values in (expected.get("overridden_slots") or {}).items():
+        if not _slot_contains(rewrite.get("overridden_slots") or {}, slot_name, values):
+            failures.append(
+                _failure(case_id, turn_index, "overridden_slot_mismatch", slot_name)
             )
     return failures
 
@@ -279,7 +304,7 @@ def _evaluate_trace(
     if isinstance(expected_time, dict):
         actual_time = trace.get("time_binding") or {}
         for key, value in expected_time.items():
-            if actual_time.get(key) != value:
+            if not _expected_field_matches(key, actual_time.get(key), value):
                 failures.append(_failure(case_id, turn_index, "time_binding_mismatch"))
     return failures
 
@@ -322,7 +347,7 @@ def _evaluate_memory(
         if isinstance(expected_time, dict):
             actual_time = after.get("last_time_binding") or {}
             for key, value in expected_time.items():
-                if actual_time.get(key) != value:
+                if not _expected_field_matches(key, actual_time.get(key), value):
                     failures.append(
                         _failure(case_id, turn_index, "snapshot_time_mismatch")
                     )
@@ -358,12 +383,40 @@ def _normalize_text(value: str) -> str:
     return " ".join(str(value).split())
 
 
+def _normalize_natural_text(value: Any) -> str:
+    return "".join(str(value).split())
+
+
+def _text_contains(text: str, fragment: str) -> bool:
+    return _normalize_natural_text(fragment) in _normalize_natural_text(text)
+
+
+def _expected_field_matches(key: str, actual: Any, expected: Any) -> bool:
+    if key == "raw_text":
+        return _normalize_natural_text(actual) == _normalize_natural_text(expected)
+    return actual == expected
+
+
 def _has_contextual_signal(
     rewritten_query: str, original_query: str, expected: dict[str, Any]
 ) -> bool:
-    if "基于上一轮条件" in rewritten_query or "上一轮" in rewritten_query:
-        return True
+    if _has_explanatory_rewrite_prefix(rewritten_query):
+        return False
     return any(
-        fragment in rewritten_query and fragment not in original_query
+        _text_contains(rewritten_query, fragment)
+        and not _text_contains(original_query, fragment)
         for fragment in expected.get("contains") or []
     )
+
+
+def _has_explanatory_rewrite_prefix(rewritten_query: str) -> bool:
+    return any(token in rewritten_query for token in ("基于上一轮条件", "本轮问题"))
+
+
+def _slot_contains(slots: dict[str, Any], key: str, expected_values: Any) -> bool:
+    actual = slots.get(key)
+    if not isinstance(expected_values, list):
+        expected_values = [expected_values]
+    if isinstance(actual, list):
+        return all(value in actual for value in expected_values)
+    return all(value == actual for value in expected_values)
