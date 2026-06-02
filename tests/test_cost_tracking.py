@@ -61,7 +61,9 @@ def test_cost_tracker_calculates_llm_and_embedding_costs():
     )
 
     tracker.add_llm_usage("生成SQL", input_tokens=1000, output_tokens=2000)
-    tracker.add_embedding_usage("召回字段", tokens=4000, estimated=True)
+    tracker.add_embedding_usage(
+        "召回字段", tokens=4000, estimated=True, latency_ms=12.5
+    )
     summary = tracker.summary()
 
     assert summary["llm_input_tokens"] == 1000
@@ -72,6 +74,7 @@ def test_cost_tracker_calculates_llm_and_embedding_costs():
     assert summary["embedding_estimated"] is True
     assert summary["calls"][0]["latency_ms"] is None
     assert summary["calls"][0]["model"] is None
+    assert summary["calls"][1]["latency_ms"] == 12.5
 
 
 def test_cost_tracker_records_llm_observability_fields():

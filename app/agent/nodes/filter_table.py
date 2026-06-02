@@ -24,6 +24,9 @@ async def filter_table(state: DataAgentState, runtime: Runtime[DataAgentContext]
     try:
         query = state["query"]
         table_infos: list[TableInfoState] = state["table_infos"]
+        prompt_table_infos = compact_table_context_for_filtering(
+            table_infos, state.get("business_binding") or {}
+        )
 
         prompt = PromptTemplate(
             template=load_prompt("filter_table_info"),
@@ -38,7 +41,7 @@ async def filter_table(state: DataAgentState, runtime: Runtime[DataAgentContext]
             {
                 "query": query,
                 "table_infos": yaml.dump(
-                    table_infos, allow_unicode=True, sort_keys=False
+                    prompt_table_infos, allow_unicode=True, sort_keys=False
                 ),
             },
             step,
@@ -66,3 +69,34 @@ async def filter_table(state: DataAgentState, runtime: Runtime[DataAgentContext]
         logger.error(f"{step} failed: {e}")
         writer({"type": "progress", "step": step, "status": "error"})
         raise
+
+
+def compact_table_context_for_filtering(
+    table_infos: list[TableInfoState], business_binding: dict
+) -> list[dict]:
+    """Return a smaller table context without removing candidate columns."""
+
+    if not business_binding:
+        return table_infos
+
+    compacted = []
+    for table_info in table_infos:
+        compacted.append(
+            {
+                "name": table_info["name"],
+                "role": table_info.get("role", ""),
+                "columns": [
+                    _compact_column(column_info)
+                    for column_info in table_info.get("columns") or []
+                ],
+            }
+        )
+    return compacted
+
+
+def _compact_column(column_info: dict) -> dict:
+    return {
+        "name": column_info["name"],
+        "role": column_info.get("role", ""),
+        "alias": column_info.get("alias") or [],
+    }

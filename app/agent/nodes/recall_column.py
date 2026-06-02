@@ -71,11 +71,15 @@ async def recall_column(state: DataAgentState, runtime: Runtime[DataAgentContext
                 embedding_client.aembed_query(keyword),
                 app_config.agent.embedding_timeout_seconds,
             )
+            embedding_latency_ms = round(
+                (time.perf_counter() - keyword_started_at) * 1000, 2
+            )
             runtime.context["cost_tracker"].add_embedding_usage(
                 step,
                 estimate_tokens(keyword),
                 estimated=True,
                 model=app_config.embedding.model,
+                latency_ms=embedding_latency_ms,
                 cache_hit=bool(getattr(embedding_client, "last_cache_hit", False)),
             )
             current_column_infos: list[ColumnInfo] = await ainvoke_with_timeout(

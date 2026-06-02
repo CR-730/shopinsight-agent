@@ -146,11 +146,13 @@ async def _search_values_by_vector(
         embedding_client.aembed_query(keyword),
         app_config.agent.embedding_timeout_seconds,
     )
+    embedding_latency_ms = round((time.perf_counter() - started_at) * 1000, 2)
     cost_tracker.add_embedding_usage(
         "召回字段取值",
         estimate_tokens(keyword),
         estimated=True,
         model=app_config.embedding.model,
+        latency_ms=embedding_latency_ms,
         cache_hit=bool(getattr(embedding_client, "last_cache_hit", False)),
     )
     value_infos = await ainvoke_with_timeout(
