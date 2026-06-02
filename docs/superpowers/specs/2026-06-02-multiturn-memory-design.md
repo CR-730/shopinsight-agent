@@ -56,7 +56,7 @@
 API: query + conversation_id?
   -> 创建或读取 conversation
   -> 读取 conversation_snapshot
-  -> rewrite_followup_query
+  -> structured rewrite_query
   -> 原有 LangGraph 单轮链路
   -> 收集最终 state
   -> 保存 conversation_turn
@@ -67,12 +67,15 @@ API: query + conversation_id?
 ## 追问改写边界
 
 追问改写只负责把当前问题补全成可独立理解的问题，不直接绑定指标、枚举值或生成 SQL。
+改写层采用 fast LLM 结构化输出，遵循 DIR / CQR-SQL / QURG 的独立问句 reformulation 思路，不使用业务词规则拼接。
 
 规则：
 
-- 如果当前问题已经完整，保持原文。
-- 如果当前问题包含明显追问信号，例如“那”“再看”“换成”“按”“分”“上个月”，读取上一轮快照补全。
-- 补全来源只使用最近快照中的指标、过滤条件、时间条件和上一轮改写问题摘要。
+- 如果当前问题已经完整，返回 `mode=unchanged`，`standalone_query` 保持原文。
+- 如果当前问题依赖上下文且快照为空，返回 `mode=needs_context`，服务层直接阻断，不进入 SQL 链路。
+- 如果当前问题依赖上下文且快照可用，返回 `mode=rewritten` 和可独立理解的 `standalone_query`。
+- 补全来源只使用最近快照中的指标、过滤条件、时间条件和上一轮结果摘要。
+- `inherited_slots` 和 `overridden_slots` 仅用于观测，不作为业务绑定或快照写回依据。
 - 改写后的问题仍必须重新走 RAG、business_binding、semantic_guard 和 SQL validation。
 
 ## 数据表

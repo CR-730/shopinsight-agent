@@ -12,7 +12,8 @@
 
 ## 文件结构
 
-- 创建 `app/agent/memory.py`：会话快照类型、追问判断、规则型改写、结果摘要和快照构建。
+- 创建 `app/agent/memory.py`：会话快照类型、结果摘要和快照构建。
+- 创建 `app/agent/rewrite.py`：基于 fast LLM 的结构化追问改写，输出 `mode`、`standalone_query`、`reason`、`inherited_slots` 和 `overridden_slots`。
 - 创建 `app/repositories/mysql/meta/conversation_memory_repository.py`：会话表建表、创建会话、读取快照、保存轮次和更新快照。
 - 修改 `app/services/query_service.py`：接收 conversation 参数，流式执行时收集最终 state，写入会话记忆。
 - 修改 `app/api/schemas/query_schema.py`：增加 `conversation_id` 和 `user_id`。
@@ -38,7 +39,7 @@
 
 - [ ] **步骤 2：实现最小纯逻辑**
 
-实现 `rewrite_followup_query`、`build_answer_summary`、`build_snapshot_from_state`。
+实现 `build_answer_summary`、`build_snapshot_from_state`，并用结构化 LLM rewrite 取代规则型追问拼接。
 
 - [ ] **步骤 3：运行测试验证通过**
 
