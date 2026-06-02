@@ -1,87 +1,12 @@
 from app.agent.memory import (
     build_answer_summary,
     build_snapshot_from_state,
-    rewrite_followup_query,
 )
 from app.api.schemas.query_schema import QuerySchema
 from app.repositories.mysql.meta.conversation_memory_repository import (
     ConversationMemoryRepository,
 )
 from app.services.query_service import QueryService
-
-
-def test_rewrite_followup_query_keeps_complete_query_without_snapshot():
-    rewritten = rewrite_followup_query(
-        query="统计华北地区 2025 年第一季度 GMV",
-        snapshot=None,
-    )
-
-    assert rewritten == "统计华北地区 2025 年第一季度 GMV"
-
-
-def test_rewrite_followup_query_uses_snapshot_context_for_followup():
-    snapshot = {
-        "last_metric_bindings": [
-            {"canonical_metric": "GMV", "raw_mention": "销售额"}
-        ],
-        "last_resolved_filters": [
-            {
-                "canonical_value": "华北",
-                "raw_value": "北方区域",
-                "column": "dim_region.region_name",
-            }
-        ],
-        "last_time_binding": {
-            "raw_text": "2025 年第一季度",
-            "grain": "quarter",
-        },
-        "last_answer_summary": "上一轮返回 1 行结果",
-    }
-
-    rewritten = rewrite_followup_query("那上个月呢", snapshot)
-
-    assert rewritten == "统计 2025 年第一季度 华北 GMV，那上个月呢"
-
-
-def test_rewrite_followup_query_outputs_standalone_filter_override():
-    snapshot = {
-        "last_metric_bindings": [{"canonical_metric": "GMV"}],
-        "last_resolved_filters": [
-            {
-                "canonical_value": "华北",
-                "column": "dim_region.region_name",
-                "field_alias": "地区",
-            }
-        ],
-    }
-
-    assert rewrite_followup_query("那华东呢", snapshot) == "统计 华东地区 GMV"
-    assert rewrite_followup_query("改成华东", snapshot) == "统计 华东地区 GMV"
-
-
-def test_rewrite_followup_query_outputs_standalone_metric_override():
-    snapshot = {
-        "last_metric_bindings": [{"canonical_metric": "GMV"}],
-        "last_resolved_filters": [
-            {
-                "canonical_value": "华北",
-                "column": "dim_region.region_name",
-                "field_alias": "地区",
-            }
-        ],
-    }
-
-    assert rewrite_followup_query("那客单价呢", snapshot) == "统计 华北地区 客单价"
-
-
-def test_rewrite_followup_query_keeps_complete_new_query_with_snapshot():
-    snapshot = {
-        "last_metric_bindings": [{"canonical_metric": "GMV"}],
-        "last_resolved_filters": [{"canonical_value": "华北"}],
-    }
-
-    assert rewrite_followup_query("统计各品类销量", snapshot) == "统计各品类销量"
-    assert rewrite_followup_query("统计火星地区 GMV", snapshot) == "统计火星地区 GMV"
 
 
 def test_build_answer_summary_counts_rows_and_columns():
@@ -154,39 +79,6 @@ def test_build_snapshot_from_state_requires_structured_metric_binding():
     )
 
     assert snapshot is None
-
-
-def test_rewrite_followup_query_does_not_guess_field_alias_from_column_name():
-    snapshot = {
-        "last_metric_bindings": [{"canonical_metric": "GMV"}],
-        "last_resolved_filters": [
-            {
-                "canonical_value": "华北",
-                "column": "dim_region.region_name",
-            }
-        ],
-    }
-
-    assert rewrite_followup_query("那华东呢", snapshot) == "统计 华东 GMV"
-
-
-def test_rewrite_followup_query_does_not_replace_first_filter_when_ambiguous():
-    snapshot = {
-        "last_metric_bindings": [{"canonical_metric": "GMV"}],
-        "last_resolved_filters": [
-            {
-                "canonical_value": "华北",
-                "field_alias": "地区",
-            },
-            {
-                "canonical_value": "家电",
-                "field_alias": "品类",
-            },
-        ],
-    }
-
-    assert rewrite_followup_query("改成华东", snapshot) == "统计 华北地区 家电品类 GMV"
-    assert rewrite_followup_query("改成华东地区", snapshot) == "统计 华东地区 家电品类 GMV"
 
 
 class FakeResult:
@@ -324,7 +216,7 @@ def test_conversation_repository_writes_are_scoped_by_user_id():
             conversation_id="conv-1",
             user_id="u1",
             user_query="那上个月呢",
-            rewritten_query="基于上一轮条件：指标 GMV；本轮问题：那上个月呢",
+            rewritten_query="统计华北地区 GMV",
             final_state={"sql": "select 1", "final_answer": [{"gmv": 100}]},
             final_answer_summary="返回 1 行，字段：gmv",
         )
@@ -434,6 +326,19 @@ def test_query_service_emits_conversation_event_and_persists_memory(monkeypatch)
     fake_graph = FakeGraph()
     monkeypatch.setattr("app.services.query_service.graph", fake_graph)
 
+    async def fake_rewrite_query(query, snapshot, cost_tracker):
+        from app.agent.rewrite import ConversationRewriteResult
+
+        return ConversationRewriteResult(
+            mode="rewritten",
+            standalone_query="统计 2025 年第一季度 华北地区 GMV，那上个月呢",
+            reason="基于上一轮快照改写为独立问句",
+            inherited_slots={"metric": ["GMV"], "filters": ["华北"]},
+            overridden_slots={},
+        )
+
+    monkeypatch.setattr("app.services.query_service.rewrite_query", fake_rewrite_query)
+
     memory_repository = FakeMemoryRepository()
     service = QueryService(
         meta_mysql_repository=FakeMetaRepository(),
@@ -463,7 +368,9 @@ def test_query_service_emits_conversation_event_and_persists_memory(monkeypatch)
 
     assert events[0]["type"] == "conversation"
     assert events[0]["conversation_id"] == "conv-new"
-    assert events[0]["rewritten_query"] == "统计 华北 GMV，那上个月呢"
+    assert events[0]["rewrite"]["mode"] == "rewritten"
+    assert events[0]["rewrite"]["inherited_slots"]["metric"] == ["GMV"]
+    assert events[0]["rewritten_query"] == "统计 2025 年第一季度 华北地区 GMV，那上个月呢"
     assert fake_graph.input["query"] == events[0]["rewritten_query"]
     assert fake_graph.stream_mode == ["custom", "values"]
     assert memory_repository.saved_turns[0]["user_query"] == "那上个月呢"
@@ -522,6 +429,19 @@ def test_query_service_creates_new_conversation_when_supplied_id_is_inaccessible
             yield ("values", {**dict(input), "final_answer": [{"ok": 1}]})
 
     monkeypatch.setattr("app.services.query_service.graph", FakeGraph())
+
+    async def fake_rewrite_query(query, snapshot, cost_tracker):
+        from app.agent.rewrite import ConversationRewriteResult
+
+        return ConversationRewriteResult(
+            mode="unchanged",
+            standalone_query=query,
+            reason="完整新问题",
+            inherited_slots={},
+            overridden_slots={},
+        )
+
+    monkeypatch.setattr("app.services.query_service.rewrite_query", fake_rewrite_query)
     memory_repository = FakeMemoryRepository()
     service = QueryService(
         meta_mysql_repository=FakeMetaRepository(),
@@ -554,7 +474,7 @@ def test_query_service_creates_new_conversation_when_supplied_id_is_inaccessible
     assert events[0]["conversation_id"] == "conv-new"
 
 
-def test_query_service_blocks_followup_without_snapshot(monkeypatch):
+def test_query_service_blocks_when_rewrite_needs_context(monkeypatch):
     import asyncio
     import json
 
@@ -600,6 +520,20 @@ def test_query_service_blocks_followup_without_snapshot(monkeypatch):
     fake_graph = FakeGraph()
     monkeypatch.setattr("app.services.query_service.graph", fake_graph)
 
+    async def fake_rewrite_query(query, snapshot, cost_tracker):
+        from app.agent.rewrite import ConversationRewriteResult
+
+        assert snapshot is None
+        return ConversationRewriteResult(
+            mode="needs_context",
+            standalone_query=query,
+            reason="缺少上一轮会话上下文，无法解析追问",
+            inherited_slots={},
+            overridden_slots={},
+        )
+
+    monkeypatch.setattr("app.services.query_service.rewrite_query", fake_rewrite_query)
+
     memory_repository = FakeMemoryRepository()
     service = QueryService(
         meta_mysql_repository=FakeMetaRepository(),
@@ -629,6 +563,7 @@ def test_query_service_blocks_followup_without_snapshot(monkeypatch):
     ]
 
     trace = next(event for event in events if event["type"] == "trace")["data"]
+    assert events[0]["rewrite"]["mode"] == "needs_context"
     assert fake_graph.called is False
     assert trace["blocked_by"] == "semantic_guard"
     assert trace["final_answer"] is None

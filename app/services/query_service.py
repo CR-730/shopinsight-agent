@@ -22,9 +22,8 @@ from app.agent.llm_usage import (
 from app.agent.memory import (
     build_answer_summary,
     build_snapshot_from_state,
-    is_followup_query,
-    rewrite_followup_query,
 )
+from app.agent.rewrite import rewrite_query
 from app.agent.state import DataAgentState
 from app.conf.app_config import app_config
 from app.repositories.es.value_es_repository import ValueESRepository
@@ -86,22 +85,33 @@ class QueryService:
                     user_id=user_id, first_query=query
                 )
             )
+        cost_tracker = CostTracker(
+            CostRates(
+                llm_input_per_1m_tokens=app_config.cost.llm_input_per_1m_tokens,
+                llm_output_per_1m_tokens=app_config.cost.llm_output_per_1m_tokens,
+                embedding_per_1m_tokens=app_config.cost.embedding_per_1m_tokens,
+                currency=app_config.cost.currency,
+            )
+        )
         snapshot = await self.conversation_memory_repository.get_snapshot(
             conversation_id, user_id
         )
-        rewritten_query = rewrite_followup_query(query, snapshot)
+        rewrite_result = await rewrite_query(query, snapshot, cost_tracker)
+        rewritten_query = rewrite_result.standalone_query
         conversation_event = {
             "type": "conversation",
             "conversation_id": conversation_id,
             "rewritten_query": rewritten_query,
+            "rewrite": rewrite_result.model_dump(),
         }
         yield f"data: {json.dumps(conversation_event, ensure_ascii=False, default=str)}\n\n"
 
-        if snapshot is None and is_followup_query(query):
+        if rewrite_result.mode == "needs_context":
             final_state = {
                 "query": rewritten_query,
                 "blocked_by": "semantic_guard",
-                "safety_error": "缺少上一轮会话上下文，无法解析追问",
+                "safety_error": rewrite_result.reason
+                or "缺少上一轮会话上下文，无法解析追问",
                 "final_answer": None,
             }
             await self.conversation_memory_repository.save_turn(
@@ -115,7 +125,7 @@ class QueryService:
             if include_trace:
                 trace = {"type": "trace", "data": final_state}
                 yield f"data: {json.dumps(trace, ensure_ascii=False, default=str)}\n\n"
-            usage = {"type": "usage", "data": {}}
+            usage = {"type": "usage", "data": cost_tracker.summary()}
             yield f"data: {json.dumps(usage, ensure_ascii=False, default=str)}\n\n"
             return
 
@@ -126,14 +136,6 @@ class QueryService:
             max_correction_attempts=app_config.agent.max_sql_correction_attempts,
         )
         # Context 保存本次图执行需要复用的外部依赖，节点通过 runtime.context 读取
-        cost_tracker = CostTracker(
-            CostRates(
-                llm_input_per_1m_tokens=app_config.cost.llm_input_per_1m_tokens,
-                llm_output_per_1m_tokens=app_config.cost.llm_output_per_1m_tokens,
-                embedding_per_1m_tokens=app_config.cost.embedding_per_1m_tokens,
-                currency=app_config.cost.currency,
-            )
-        )
         metadata_build_version = (
             await self.meta_mysql_repository.get_active_build_version()
         )
