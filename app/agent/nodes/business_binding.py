@@ -341,7 +341,7 @@ def _value_before_alias(query: str, field_alias: str) -> str:
     index = query.find(field_alias)
     if index <= 0:
         return ""
-    prefix = query[:index]
+    prefix = _strip_time_expressions(query[:index])
     match = re.search(r"([\u4e00-\u9fffA-Za-z0-9_-]+)$", prefix)
     if not match:
         return ""
@@ -357,6 +357,15 @@ def _value_before_alias(query: str, field_alias: str) -> str:
     if any(token in raw_value for token in ("年", "季度", "月")):
         return ""
     return raw_value
+
+
+def _strip_time_expressions(text: str) -> str:
+    text = re.sub(
+        r"\d{4}\s*年?\s*(?:第?\s*[一二三四]|Q[1-4])\s*季度?", " ", text, flags=re.I
+    )
+    text = re.sub(r"\d{4}\s*年\s*\d{1,2}\s*月", " ", text)
+    text = re.sub(r"\d{4}-\d{1,2}(?:-\d{1,2})?", " ", text)
+    return text
 
 
 def _values_by_column(retrieved_value_infos: list[Any]) -> dict[str, set[str]]:

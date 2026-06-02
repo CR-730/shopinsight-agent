@@ -8,7 +8,10 @@ from langgraph.runtime import Runtime
 from app.agent.context import DataAgentContext
 from app.agent.llm import correct_sql_llm
 from app.agent.llm_usage import ainvoke_llm_with_usage
-from app.agent.nodes.pre_sql_execution_validation import normalize_sql_for_execution
+from app.agent.nodes.pre_sql_execution_validation import (
+    normalize_sql_for_execution,
+    repair_invalid_join_relationship,
+)
 from app.agent.sql_loop import DEFAULT_MAX_SQL_CORRECTION_ATTEMPTS
 from app.agent.state import DataAgentState
 from app.conf.app_config import app_config
@@ -31,6 +34,16 @@ async def correct_sql(state: DataAgentState, runtime: Runtime[DataAgentContext])
         query = state["query"]
         sql = state["sql"]
         error = state["error"]
+        correction_attempts = state.get("correction_attempts", 0) + 1
+
+        repaired_sql = repair_invalid_join_relationship(state, sql)
+        if repaired_sql and not _is_same_sql_after_normalization(sql, repaired_sql):
+            logger.info(f"基于元数据关系校正SQL：{repaired_sql}")
+            writer({"type": "progress", "step": step, "status": "success"})
+            return {
+                "sql": repaired_sql,
+                "correction_attempts": correction_attempts,
+            }
 
         prompt = PromptTemplate(
             template=load_prompt("correct_sql"),
@@ -70,7 +83,6 @@ async def correct_sql(state: DataAgentState, runtime: Runtime[DataAgentContext])
         )
 
         logger.info(f"校正后的SQL：{result}")
-        correction_attempts = state.get("correction_attempts", 0) + 1
         if _is_same_sql_after_normalization(sql, result):
             max_attempts = int(
                 state.get("max_correction_attempts")

@@ -1,58 +1,609 @@
-- id: conv_followup_time_change
+- id: conv_metric_and_region_followup
   suite: regression
   difficulty: medium
   capabilities:
     - conversation_memory
     - followup_rewrite
-    - sql_generation
+    - metric_inheritance
+    - condition_override
   tags:
     - multiturn
-    - time_followup
+    - metric_inheritance
+    - region_override
   risk_points:
-    - 追问只说时间变化时必须继承上一轮指标和地区过滤
+    - 第二轮只换地区时必须继承上一轮 GMV 指标
   turns:
-    - query: 统计华北地区 2025 年第一季度 GMV
-      expected_rewritten_query: 统计华北地区 2025 年第一季度 GMV
-    - query: 那上个月呢
-      expected_rewritten_contains:
-        - GMV
-        - 华北
-        - 那上个月呢
+    - query: 统计华北地区 GMV
+      expected_conversation_id: same
+      expected_rewritten:
+        mode: unchanged
+        contains:
+          - 华北
+          - GMV
+      expected_memory:
+        snapshot_write: true
+        snapshot_metric: GMV
+        snapshot_filters:
+          - 华北
+      expected_trace:
+        metric_bindings:
+          - GMV
+        resolved_filters:
+          - 华北
+        time_binding: null
+        blocked_by: null
+        final_answer: required
+    - query: 那华东呢
+      expected_conversation_id: same
+      expected_rewritten:
+        mode: contextualized
+        contains:
+          - GMV
+          - 华东
+        forbidden_contains:
+          - 华北
+      expected_memory:
+        snapshot_write: true
+        snapshot_metric: GMV
+        snapshot_filters:
+          - 华东
+      expected_trace:
+        metric_bindings:
+          - GMV
+        resolved_filters:
+          - 华东
+        time_binding: null
+        blocked_by: null
+        final_answer: required
 
-- id: conv_followup_metric_change
+- id: conv_filter_inheritance_metric_change
   suite: regression
   difficulty: medium
   capabilities:
     - conversation_memory
     - followup_rewrite
-    - business_binding
+    - filter_inheritance
+    - condition_override
   tags:
     - multiturn
-    - metric_focus_change
+    - metric_override
+    - filter_inheritance
   risk_points:
-    - 用户换指标时不能丢失上一轮时间和过滤条件
+    - 第二轮只换指标时必须继承上一轮华北筛选
   turns:
-    - query: 统计华东地区 2025 年 3 月订单数
-      expected_rewritten_query: 统计华东地区 2025 年 3 月订单数
-    - query: 换成销售额
-      expected_rewritten_contains:
-        - 华东
-        - 换成销售额
+    - query: 统计华北地区 GMV
+      expected_conversation_id: same
+      expected_rewritten:
+        mode: unchanged
+        contains:
+          - 华北
+          - GMV
+      expected_memory:
+        snapshot_write: true
+        snapshot_metric: GMV
+        snapshot_filters:
+          - 华北
+      expected_trace:
+        metric_bindings:
+          - GMV
+        resolved_filters:
+          - 华北
+        time_binding: null
+        blocked_by: null
+        final_answer: required
+    - query: 那客单价呢
+      expected_conversation_id: same
+      expected_rewritten:
+        mode: contextualized
+        contains:
+          - 华北
+          - 客单价
+      expected_memory:
+        snapshot_write: true
+        snapshot_metric: AOV
+        snapshot_filters:
+          - 华北
+      expected_trace:
+        metric_bindings:
+          - AOV
+        resolved_filters:
+          - 华北
+        time_binding: null
+        blocked_by: null
+        final_answer: required
 
-- id: conv_blocked_turn_does_not_update_snapshot
+- id: conv_time_inheritance_region_change
+  suite: regression
+  difficulty: medium
+  capabilities:
+    - conversation_memory
+    - followup_rewrite
+    - time_inheritance
+    - condition_override
+  tags:
+    - multiturn
+    - time_inheritance
+    - region_override
+  risk_points:
+    - 第二轮只换地区时必须带入上一轮时间
+  turns:
+    - query: 统计 2025 年第一季度华北地区 GMV
+      expected_conversation_id: same
+      expected_rewritten:
+        mode: unchanged
+        contains:
+          - 2025 年第一季度
+          - 华北
+          - GMV
+      expected_memory:
+        snapshot_write: true
+        snapshot_metric: GMV
+        snapshot_filters:
+          - 华北
+        snapshot_time:
+          raw_text: 2025 年第一季度
+      expected_trace:
+        metric_bindings:
+          - GMV
+        resolved_filters:
+          - 华北
+        time_binding:
+          raw_text: 2025 年第一季度
+        blocked_by: null
+        final_answer: required
+    - query: 那华东呢
+      expected_conversation_id: same
+      expected_rewritten:
+        mode: contextualized
+        contains:
+          - GMV
+          - 华东
+          - 2025 年第一季度
+        forbidden_contains:
+          - 华北
+      expected_memory:
+        snapshot_write: true
+        snapshot_metric: GMV
+        snapshot_filters:
+          - 华东
+        snapshot_time:
+          raw_text: 2025 年第一季度
+      expected_trace:
+        metric_bindings:
+          - GMV
+        resolved_filters:
+          - 华东
+        time_binding:
+          raw_text: 2025 年第一季度
+        blocked_by: null
+        final_answer: required
+
+- id: conv_region_override
+  suite: regression
+  difficulty: medium
+  capabilities:
+    - conversation_memory
+    - followup_rewrite
+    - condition_override
+  tags:
+    - multiturn
+    - explicit_override
+  risk_points:
+    - 明确改成华东时不能继续使用华北过滤
+  turns:
+    - query: 统计华北地区 GMV
+      expected_conversation_id: same
+      expected_rewritten:
+        mode: unchanged
+        contains:
+          - 华北
+          - GMV
+      expected_memory:
+        snapshot_write: true
+        snapshot_metric: GMV
+        snapshot_filters:
+          - 华北
+      expected_trace:
+        metric_bindings:
+          - GMV
+        resolved_filters:
+          - 华北
+        time_binding: null
+        blocked_by: null
+        final_answer: required
+    - query: 改成华东
+      expected_conversation_id: same
+      expected_rewritten:
+        mode: contextualized
+        contains:
+          - GMV
+          - 华东
+        forbidden_contains:
+          - 华北
+      expected_memory:
+        snapshot_write: true
+        snapshot_metric: GMV
+        snapshot_filters:
+          - 华东
+      expected_trace:
+        metric_bindings:
+          - GMV
+        resolved_filters:
+          - 华东
+        forbidden_filters:
+          - 华北
+        time_binding: null
+        blocked_by: null
+        final_answer: required
+
+- id: conv_new_complete_query_no_contamination
+  suite: regression
+  difficulty: medium
+  capabilities:
+    - conversation_memory
+    - new_query_no_contamination
+  tags:
+    - multiturn
+    - no_contamination
+  risk_points:
+    - 完整新问题不能继承上一轮华北 GMV
+  turns:
+    - query: 统计华北地区 GMV
+      expected_conversation_id: same
+      expected_rewritten:
+        mode: unchanged
+        contains:
+          - 华北
+          - GMV
+      expected_memory:
+        snapshot_write: true
+        snapshot_metric: GMV
+        snapshot_filters:
+          - 华北
+      expected_trace:
+        metric_bindings:
+          - GMV
+        resolved_filters:
+          - 华北
+        time_binding: null
+        blocked_by: null
+        final_answer: required
+    - query: 统计各品类销量
+      expected_conversation_id: same
+      expected_rewritten:
+        mode: unchanged
+        contains:
+          - 各品类
+          - 销量
+        forbidden_contains:
+          - 华北
+          - GMV
+      expected_memory:
+        snapshot_write: false
+        snapshot_unchanged_from_turn: 1
+      expected_trace:
+        metric_bindings: []
+        resolved_filters: []
+        forbidden_filters:
+          - 华北
+        time_binding: null
+        blocked_by: null
+        final_answer: required
+
+- id: conv_safety_failure_does_not_pollute_snapshot
   suite: adversarial
   difficulty: hard
   capabilities:
     - conversation_memory
+    - snapshot_pollution_guard
     - safety
+    - followup_rewrite
   tags:
     - multiturn
-    - blocked_snapshot
+    - safety
+    - snapshot_guard
   risk_points:
-    - 被 semantic_guard 拦截的轮次不能覆盖上一轮成功快照
+    - 安全失败轮次不能覆盖上一轮成功 snapshot
   turns:
     - query: 统计华北地区 GMV
-      expected_snapshot_metric: GMV
-    - query: 统计不存在指标
-      expected_blocked_by: semantic_guard
-      expected_snapshot_unchanged: true
+      expected_conversation_id: same
+      expected_rewritten:
+        mode: unchanged
+        contains:
+          - 华北
+          - GMV
+      expected_memory:
+        snapshot_write: true
+        snapshot_metric: GMV
+        snapshot_filters:
+          - 华北
+      expected_trace:
+        metric_bindings:
+          - GMV
+        resolved_filters:
+          - 华北
+        time_binding: null
+        blocked_by: null
+        final_answer: required
+    - query: 查询华北地区订单明细和用户手机号
+      expected_conversation_id: same
+      expected_rewritten:
+        mode: unchanged
+        contains:
+          - 订单明细
+          - 用户手机号
+      expected_memory:
+        snapshot_write: false
+        snapshot_unchanged_from_turn: 1
+      expected_trace:
+        blocked_by: pre_rag_guard
+        final_answer: absent
+    - query: 那华东呢
+      expected_conversation_id: same
+      expected_rewritten:
+        mode: contextualized
+        contains:
+          - GMV
+          - 华东
+        forbidden_contains:
+          - 华北
+      expected_memory:
+        snapshot_write: true
+        snapshot_metric: GMV
+        snapshot_filters:
+          - 华东
+      expected_trace:
+        metric_bindings:
+          - GMV
+        resolved_filters:
+          - 华东
+        blocked_by: null
+        final_answer: required
+
+- id: conv_business_failure_does_not_pollute_snapshot
+  suite: adversarial
+  difficulty: hard
+  capabilities:
+    - conversation_memory
+    - snapshot_pollution_guard
+    - followup_rewrite
+  tags:
+    - multiturn
+    - unresolved_business
+    - snapshot_guard
+  risk_points:
+    - 业务未解析轮次不能覆盖上一轮成功 snapshot
+  turns:
+    - query: 统计华北地区 GMV
+      expected_conversation_id: same
+      expected_rewritten:
+        mode: unchanged
+        contains:
+          - 华北
+          - GMV
+      expected_memory:
+        snapshot_write: true
+        snapshot_metric: GMV
+        snapshot_filters:
+          - 华北
+      expected_trace:
+        metric_bindings:
+          - GMV
+        resolved_filters:
+          - 华北
+        blocked_by: null
+        final_answer: required
+    - query: 统计火星地区 GMV
+      expected_conversation_id: same
+      expected_rewritten:
+        mode: unchanged
+        contains:
+          - 火星
+          - GMV
+      expected_memory:
+        snapshot_write: false
+        snapshot_unchanged_from_turn: 1
+      expected_trace:
+        unresolved_bindings:
+          - 火星
+        blocked_by: semantic_guard
+        final_answer: absent
+    - query: 那客单价呢
+      expected_conversation_id: same
+      expected_rewritten:
+        mode: contextualized
+        contains:
+          - 华北
+          - 客单价
+      expected_memory:
+        snapshot_write: true
+        snapshot_metric: AOV
+        snapshot_filters:
+          - 华北
+      expected_trace:
+        metric_bindings:
+          - AOV
+        resolved_filters:
+          - 华北
+        blocked_by: null
+        final_answer: required
+
+- id: conv_user_isolation_recreates_conversation
+  suite: adversarial
+  difficulty: hard
+  capabilities:
+    - conversation_memory
+    - conversation_isolation
+  tags:
+    - multiturn
+    - user_isolation
+  risk_points:
+    - 同一个 conversation_id 换 user_id 不能读取或继承原用户快照
+  turns:
+    - query: 统计华北地区 GMV
+      user_id: user-a
+      expected_conversation_id: new
+      expected_rewritten:
+        mode: unchanged
+        contains:
+          - 华北
+          - GMV
+      expected_memory:
+        snapshot_write: true
+        snapshot_metric: GMV
+        snapshot_filters:
+          - 华北
+      expected_trace:
+        metric_bindings:
+          - GMV
+        resolved_filters:
+          - 华北
+        blocked_by: null
+        final_answer: required
+    - query: 那华东呢
+      user_id: user-b
+      supplied_conversation_id: previous
+      expected_conversation_id: new
+      expected_rewritten:
+        mode: unchanged
+        contains:
+          - 那华东呢
+        forbidden_contains:
+          - GMV
+          - 华北
+      expected_memory:
+        snapshot_write: false
+        snapshot_source: isolated_empty
+      expected_trace:
+        blocked_by: semantic_guard
+        final_answer: absent
+
+- id: conv_sql_exception_does_not_pollute_snapshot
+  suite: regression
+  difficulty: medium
+  capabilities:
+    - conversation_memory
+    - snapshot_pollution_guard
+  tags:
+    - multiturn
+    - sql_exception
+    - mocked
+  risk_points:
+    - SQL 超时或执行异常不能覆盖上一轮成功 snapshot
+  runner: mock
+  turns:
+    - query: 统计华北地区 GMV
+      expected_conversation_id: same
+      expected_rewritten:
+        mode: unchanged
+        contains:
+          - 华北
+          - GMV
+      expected_memory:
+        snapshot_write: true
+        snapshot_metric: GMV
+        snapshot_filters:
+          - 华北
+      expected_trace:
+        metric_bindings:
+          - GMV
+        resolved_filters:
+          - 华北
+        blocked_by: null
+        final_answer: required
+    - query: 那华东呢
+      simulate:
+        exception_stage: tool_execution
+        error: SQL 执行超时
+      expected_conversation_id: same
+      expected_rewritten:
+        mode: contextualized
+        contains:
+          - GMV
+          - 华东
+        forbidden_contains:
+          - 华北
+      expected_memory:
+        snapshot_write: false
+        snapshot_unchanged_from_turn: 1
+      expected_trace:
+        exception_stage: tool_execution
+        error_contains: SQL 执行超时
+        final_answer: absent
+
+- id: conv_chained_followup_region_then_metric
+  suite: regression
+  difficulty: hard
+  capabilities:
+    - conversation_memory
+    - followup_rewrite
+    - metric_inheritance
+    - filter_inheritance
+    - condition_override
+  tags:
+    - multiturn
+    - chained_followup
+  risk_points:
+    - 连续追问时第二轮更新后的地区必须被第三轮继承
+  turns:
+    - query: 统计华北地区 GMV
+      expected_conversation_id: same
+      expected_rewritten:
+        mode: unchanged
+        contains:
+          - 华北
+          - GMV
+      expected_memory:
+        snapshot_write: true
+        snapshot_metric: GMV
+        snapshot_filters:
+          - 华北
+      expected_trace:
+        metric_bindings:
+          - GMV
+        resolved_filters:
+          - 华北
+        blocked_by: null
+        final_answer: required
+    - query: 那华东呢
+      expected_conversation_id: same
+      expected_rewritten:
+        mode: contextualized
+        contains:
+          - GMV
+          - 华东
+        forbidden_contains:
+          - 华北
+      expected_memory:
+        snapshot_write: true
+        snapshot_metric: GMV
+        snapshot_filters:
+          - 华东
+      expected_trace:
+        metric_bindings:
+          - GMV
+        resolved_filters:
+          - 华东
+        blocked_by: null
+        final_answer: required
+    - query: 换成客单价
+      expected_conversation_id: same
+      expected_rewritten:
+        mode: contextualized
+        contains:
+          - 华东
+          - 客单价
+      expected_memory:
+        snapshot_write: true
+        snapshot_metric: AOV
+        snapshot_filters:
+          - 华东
+      expected_trace:
+        metric_bindings:
+          - AOV
+        resolved_filters:
+          - 华东
+        forbidden_filters:
+          - 华北
+        blocked_by: null
+        final_answer: required

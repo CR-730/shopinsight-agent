@@ -8,6 +8,7 @@ from app.agent.nodes.pre_rag_guard import (
 )
 from app.agent.nodes.pre_sql_execution_validation import (
     normalize_sql_for_execution,
+    repair_invalid_join_relationship,
     validate_sql_before_execution,
     validate_sql_structure_semantics,
 )
@@ -186,6 +187,41 @@ def test_pre_sql_execution_validation_flags_invalid_join_relationship_as_repaira
         "JOIN 条件不符合元数据关系：fact_order.region_id = dim_region.region_name。"
         "候选正确关系：fact_order.region_id = dim_region.region_id。"
     )
+
+
+def test_repair_invalid_join_relationship_uses_metadata_candidate():
+    state = {
+        "table_infos": [
+            {
+                "name": "fact_order",
+                "role": "fact",
+                "columns": [
+                    {"name": "region_id", "role": "foreign_key"},
+                    {"name": "order_amount", "role": "measure"},
+                ],
+            },
+            {
+                "name": "dim_region",
+                "role": "dim",
+                "columns": [
+                    {"name": "region_id", "role": "primary_key"},
+                    {"name": "region_name", "role": "dimension"},
+                ],
+            },
+        ]
+    }
+    sql = """
+    SELECT SUM(f.order_amount) AS GMV
+    FROM fact_order f
+    JOIN dim_region r ON f.region_id = r.region_name
+    WHERE r.region_name = '华北'
+    """
+
+    repaired = repair_invalid_join_relationship(state, sql)
+
+    assert repaired is not None
+    assert "f.region_id = r.region_id" in repaired
+    assert "r.region_name = '华北'" in repaired
 
 
 def test_pre_sql_execution_validation_allows_valid_join_relationship():

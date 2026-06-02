@@ -95,6 +95,77 @@ def test_resolve_value_filter_marks_unknown_value_by_field_alias():
     ]
 
 
+def test_resolve_value_filter_binds_standalone_rewritten_region_override():
+    filters, issues = resolve_value_filters(
+        query="统计 华东地区 GMV",
+        table_infos=[
+            {
+                "name": "dim_region",
+                "role": "dimension",
+                "columns": [
+                    {
+                        "name": "region_name",
+                        "role": "dimension",
+                        "alias": ["地区", "区域", "大区"],
+                        "examples": ["华北", "华东"],
+                    }
+                ],
+            }
+        ],
+        retrieved_value_infos=[
+            ValueInfo(
+                id="dim_region.region_name.华东",
+                value="华东",
+                column_id="dim_region.region_name",
+            )
+        ],
+        enum_aliases={},
+    )
+
+    assert issues == []
+    assert filters == [
+        {
+            "raw_value": "华东",
+            "canonical_value": "华东",
+            "column": "dim_region.region_name",
+            "field_alias": "地区",
+            "matched_by": "retrieved_value",
+            "allowed_sql_literals": ["华东"],
+        }
+    ]
+
+
+def test_resolve_value_filter_ignores_time_prefix_before_dimension_value():
+    filters, issues = resolve_value_filters(
+        query="统计 2025 年第一季度华北地区 GMV",
+        table_infos=[
+            {
+                "name": "dim_region",
+                "role": "dimension",
+                "columns": [
+                    {
+                        "name": "region_name",
+                        "role": "dimension",
+                        "alias": ["地区", "区域", "大区"],
+                        "examples": ["华北", "华东"],
+                    }
+                ],
+            }
+        ],
+        retrieved_value_infos=[
+            ValueInfo(
+                id="dim_region.region_name.华北",
+                value="华北",
+                column_id="dim_region.region_name",
+            )
+        ],
+        enum_aliases={},
+    )
+
+    assert issues == []
+    assert filters[0]["canonical_value"] == "华北"
+
+
 def test_resolve_value_filter_does_not_treat_group_by_alias_as_value():
     filters, issues = resolve_value_filters(
         query="按大区统计 GMV",

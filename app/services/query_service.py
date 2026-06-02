@@ -22,6 +22,7 @@ from app.agent.llm_usage import (
 from app.agent.memory import (
     build_answer_summary,
     build_snapshot_from_state,
+    is_followup_query,
     rewrite_followup_query,
 )
 from app.agent.state import DataAgentState
@@ -68,6 +69,7 @@ class QueryService:
         query: str,
         conversation_id: str | None = None,
         user_id: str | None = None,
+        include_trace: bool = False,
     ):
         """执行一次问数工作流，并逐段产出 SSE 消息"""
 
@@ -94,6 +96,28 @@ class QueryService:
             "rewritten_query": rewritten_query,
         }
         yield f"data: {json.dumps(conversation_event, ensure_ascii=False, default=str)}\n\n"
+
+        if snapshot is None and is_followup_query(query):
+            final_state = {
+                "query": rewritten_query,
+                "blocked_by": "semantic_guard",
+                "safety_error": "缺少上一轮会话上下文，无法解析追问",
+                "final_answer": None,
+            }
+            await self.conversation_memory_repository.save_turn(
+                conversation_id=conversation_id,
+                user_id=user_id,
+                user_query=query,
+                rewritten_query=rewritten_query,
+                final_state=final_state,
+                final_answer_summary=build_answer_summary(None),
+            )
+            if include_trace:
+                trace = {"type": "trace", "data": final_state}
+                yield f"data: {json.dumps(trace, ensure_ascii=False, default=str)}\n\n"
+            usage = {"type": "usage", "data": {}}
+            yield f"data: {json.dumps(usage, ensure_ascii=False, default=str)}\n\n"
+            return
 
         # State 只放会被图节点读写和合并的业务数据，外部工具对象不塞进 State
         state = DataAgentState(
@@ -167,6 +191,9 @@ class QueryService:
                     await self.conversation_memory_repository.upsert_snapshot(
                         conversation_id, user_id, memory_snapshot
                     )
+                if include_trace:
+                    trace = {"type": "trace", "data": final_state}
+                    yield f"data: {json.dumps(trace, ensure_ascii=False, default=str)}\n\n"
             usage = {"type": "usage", "data": cost_tracker.summary()}
             yield f"data: {json.dumps(usage, ensure_ascii=False, default=str)}\n\n"
         except Exception as e:

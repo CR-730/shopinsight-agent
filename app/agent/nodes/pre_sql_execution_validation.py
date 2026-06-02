@@ -142,6 +142,60 @@ def validate_sql_structure_semantics(
     return _invalid_join_relationship(state, parsed_sql)
 
 
+def repair_invalid_join_relationship(
+    state: dict[str, Any],
+    sql: str,
+) -> str | None:
+    """Repair a join predicate when metadata has one unambiguous FK->PK candidate."""
+
+    parsed_sql = _parse_single_select(sql.strip())
+    if isinstance(parsed_sql, str):
+        return None
+
+    column_catalog = _column_catalog(state)
+    if not column_catalog:
+        return None
+
+    alias_to_table = _table_aliases(parsed_sql)
+    table_refs = _preferred_table_refs(alias_to_table)
+    for join in parsed_sql.find_all(exp.Join):
+        condition = join.args.get("on")
+        if condition is None:
+            continue
+        for predicate in condition.find_all(exp.EQ):
+            if not isinstance(predicate.left, exp.Column) or not isinstance(
+                predicate.right, exp.Column
+            ):
+                continue
+            left = _resolved_column(predicate.left, alias_to_table, column_catalog)
+            right = _resolved_column(predicate.right, alias_to_table, column_catalog)
+            if left is None or right is None or left["table"] == right["table"]:
+                continue
+            if _is_valid_join_pair(left, right):
+                continue
+
+            candidate = _candidate_join_pair(left, right, column_catalog)
+            if candidate is None:
+                continue
+            foreign_key, primary_key = candidate
+            predicate.set(
+                "this",
+                exp.column(
+                    foreign_key["name"],
+                    table=table_refs.get(foreign_key["table"], foreign_key["table"]),
+                ),
+            )
+            predicate.set(
+                "expression",
+                exp.column(
+                    primary_key["name"],
+                    table=table_refs.get(primary_key["table"], primary_key["table"]),
+                ),
+            )
+            return parsed_sql.sql(dialect="mysql")
+    return None
+
+
 def _parse_single_select(sql: str) -> exp.Expression | str:
     try:
         expressions = parse(sql, read="mysql")
@@ -198,6 +252,15 @@ def _table_aliases(expression: exp.Expression) -> dict[str, str]:
         if table.alias:
             aliases[table.alias] = table_name
     return aliases
+
+
+def _preferred_table_refs(alias_to_table: dict[str, str]) -> dict[str, str]:
+    refs: dict[str, str] = {}
+    for table_ref, table_name in alias_to_table.items():
+        refs.setdefault(table_name, table_ref)
+        if table_ref != table_name:
+            refs[table_name] = table_ref
+    return refs
 
 
 def _column_catalog(state: dict[str, Any]) -> dict[str, dict[str, str]]:
@@ -283,12 +346,24 @@ def _candidate_join_relationship(
     right: dict[str, str],
     catalog: dict[str, dict[str, str]],
 ) -> str | None:
+    candidate = _candidate_join_pair(left, right, catalog)
+    if candidate is None:
+        return None
+    foreign_key, primary_key = candidate
+    return f"{foreign_key['id']} = {primary_key['id']}"
+
+
+def _candidate_join_pair(
+    left: dict[str, str],
+    right: dict[str, str],
+    catalog: dict[str, dict[str, str]],
+) -> tuple[dict[str, str], dict[str, str]] | None:
     for foreign_key, other in ((left, right), (right, left)):
         if foreign_key["role"] != "foreign_key":
             continue
         primary_key = catalog.get(f"{other['table']}.{foreign_key['name']}".lower())
         if primary_key and primary_key["role"] == "primary_key":
-            return f"{foreign_key['id']} = {primary_key['id']}"
+            return foreign_key, primary_key
     return None
 
 
@@ -403,4 +478,3 @@ def _looks_like_detail_query(
 def _has_aggregate(expression: exp.Expression) -> bool:
     aggregate_nodes = (exp.Sum, exp.Count, exp.Avg, exp.Min, exp.Max)
     return any(True for _ in expression.find_all(*aggregate_nodes))
-

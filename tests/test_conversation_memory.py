@@ -40,10 +40,48 @@ def test_rewrite_followup_query_uses_snapshot_context_for_followup():
 
     rewritten = rewrite_followup_query("那上个月呢", snapshot)
 
-    assert rewritten == (
-        "基于上一轮条件：指标 GMV，过滤 华北，上一轮时间 2025 年第一季度；"
-        "本轮问题：那上个月呢"
-    )
+    assert rewritten == "统计 2025 年第一季度 华北 GMV，那上个月呢"
+
+
+def test_rewrite_followup_query_outputs_standalone_filter_override():
+    snapshot = {
+        "last_metric_bindings": [{"canonical_metric": "GMV"}],
+        "last_resolved_filters": [
+            {
+                "canonical_value": "华北",
+                "column": "dim_region.region_name",
+                "field_alias": "地区",
+            }
+        ],
+    }
+
+    assert rewrite_followup_query("那华东呢", snapshot) == "统计 华东地区 GMV"
+    assert rewrite_followup_query("改成华东", snapshot) == "统计 华东地区 GMV"
+
+
+def test_rewrite_followup_query_outputs_standalone_metric_override():
+    snapshot = {
+        "last_metric_bindings": [{"canonical_metric": "GMV"}],
+        "last_resolved_filters": [
+            {
+                "canonical_value": "华北",
+                "column": "dim_region.region_name",
+                "field_alias": "地区",
+            }
+        ],
+    }
+
+    assert rewrite_followup_query("那客单价呢", snapshot) == "统计 华北地区 客单价"
+
+
+def test_rewrite_followup_query_keeps_complete_new_query_with_snapshot():
+    snapshot = {
+        "last_metric_bindings": [{"canonical_metric": "GMV"}],
+        "last_resolved_filters": [{"canonical_value": "华北"}],
+    }
+
+    assert rewrite_followup_query("统计各品类销量", snapshot) == "统计各品类销量"
+    assert rewrite_followup_query("统计火星地区 GMV", snapshot) == "统计火星地区 GMV"
 
 
 def test_build_answer_summary_counts_rows_and_columns():
@@ -102,6 +140,53 @@ def test_build_snapshot_from_state_ignores_execution_error_state():
     )
 
     assert snapshot is None
+
+
+def test_build_snapshot_from_state_requires_structured_metric_binding():
+    snapshot = build_snapshot_from_state(
+        {
+            "metric_bindings": [],
+            "resolved_filters": [],
+            "time_binding": None,
+            "sql": "select sum(quantity) from fact_order",
+            "final_answer": [{"销量": 100}],
+        }
+    )
+
+    assert snapshot is None
+
+
+def test_rewrite_followup_query_does_not_guess_field_alias_from_column_name():
+    snapshot = {
+        "last_metric_bindings": [{"canonical_metric": "GMV"}],
+        "last_resolved_filters": [
+            {
+                "canonical_value": "华北",
+                "column": "dim_region.region_name",
+            }
+        ],
+    }
+
+    assert rewrite_followup_query("那华东呢", snapshot) == "统计 华东 GMV"
+
+
+def test_rewrite_followup_query_does_not_replace_first_filter_when_ambiguous():
+    snapshot = {
+        "last_metric_bindings": [{"canonical_metric": "GMV"}],
+        "last_resolved_filters": [
+            {
+                "canonical_value": "华北",
+                "field_alias": "地区",
+            },
+            {
+                "canonical_value": "家电",
+                "field_alias": "品类",
+            },
+        ],
+    }
+
+    assert rewrite_followup_query("改成华东", snapshot) == "统计 华北地区 家电品类 GMV"
+    assert rewrite_followup_query("改成华东地区", snapshot) == "统计 华东地区 家电品类 GMV"
 
 
 class FakeResult:
@@ -378,9 +463,7 @@ def test_query_service_emits_conversation_event_and_persists_memory(monkeypatch)
 
     assert events[0]["type"] == "conversation"
     assert events[0]["conversation_id"] == "conv-new"
-    assert events[0]["rewritten_query"] == (
-        "基于上一轮条件：指标 GMV，过滤 华北；本轮问题：那上个月呢"
-    )
+    assert events[0]["rewritten_query"] == "统计 华北 GMV，那上个月呢"
     assert fake_graph.input["query"] == events[0]["rewritten_query"]
     assert fake_graph.stream_mode == ["custom", "values"]
     assert memory_repository.saved_turns[0]["user_query"] == "那上个月呢"
@@ -469,3 +552,85 @@ def test_query_service_creates_new_conversation_when_supplied_id_is_inaccessible
     assert memory_repository.access_checks == [("foreign-conv", "u1")]
     assert memory_repository.created == [("u1", "继续看")]
     assert events[0]["conversation_id"] == "conv-new"
+
+
+def test_query_service_blocks_followup_without_snapshot(monkeypatch):
+    import asyncio
+    import json
+
+    class FakeMetaRepository:
+        async def get_active_build_version(self):
+            return "v1"
+
+        async def get_metadata_cache_version(self):
+            return "cache-v1"
+
+    class FakeMemoryRepository:
+        def __init__(self):
+            self.saved_turns = []
+            self.snapshots = []
+
+        async def create_conversation(self, user_id, first_query):
+            return "conv-new"
+
+        async def get_snapshot(self, conversation_id, user_id):
+            return None
+
+        async def save_turn(
+            self,
+            conversation_id,
+            user_id,
+            user_query,
+            rewritten_query,
+            final_state,
+            final_answer_summary,
+        ):
+            self.saved_turns.append(final_state)
+
+        async def upsert_snapshot(self, conversation_id, user_id, snapshot):
+            self.snapshots.append(snapshot)
+
+    class FakeGraph:
+        called = False
+
+        async def astream(self, input, context, stream_mode):
+            self.called = True
+            yield ("values", {**dict(input), "final_answer": [{"unexpected": 1}]})
+
+    fake_graph = FakeGraph()
+    monkeypatch.setattr("app.services.query_service.graph", fake_graph)
+
+    memory_repository = FakeMemoryRepository()
+    service = QueryService(
+        meta_mysql_repository=FakeMetaRepository(),
+        embedding_client=object(),
+        dw_mysql_repository=object(),
+        column_qdrant_repository=object(),
+        metric_qdrant_repository=object(),
+        value_es_repository=object(),
+        value_qdrant_repository=object(),
+        conversation_memory_repository=memory_repository,
+    )
+
+    async def collect():
+        return [
+            item
+            async for item in service.query(
+                query="那华东呢",
+                conversation_id=None,
+                user_id="u1",
+                include_trace=True,
+            )
+        ]
+
+    events = [
+        json.loads(item.removeprefix("data: ").strip())
+        for item in asyncio.run(collect())
+    ]
+
+    trace = next(event for event in events if event["type"] == "trace")["data"]
+    assert fake_graph.called is False
+    assert trace["blocked_by"] == "semantic_guard"
+    assert trace["final_answer"] is None
+    assert memory_repository.saved_turns[0]["blocked_by"] == "semantic_guard"
+    assert memory_repository.snapshots == []
