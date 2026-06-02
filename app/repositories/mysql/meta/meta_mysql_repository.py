@@ -8,6 +8,10 @@ Repository 自身只关心“如何写入”，而“哪些写操作要放在同
 问数链路运行时也会从这里读取元数据，用来把召回到的 id 补齐成完整实体
 """
 
+import hashlib
+import json
+from typing import Any
+
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -15,13 +19,37 @@ from app.entities.column_info import ColumnInfo
 from app.entities.column_metric import ColumnMetric
 from app.entities.metric_info import MetricInfo
 from app.entities.table_info import TableInfo
+from app.entities.value_alias import ValueAlias
 from app.models.column_info import ColumnInfoMySQL
 from app.models.metric_info import MetricInfoMySQL
 from app.models.table_info import TableInfoMySQL
+from app.models.value_alias import ValueAliasMySQL
 from app.repositories.mysql.meta.mappers.column_info_mapper import ColumnInfoMapper
 from app.repositories.mysql.meta.mappers.column_metric_mapper import ColumnMetricMapper
 from app.repositories.mysql.meta.mappers.metric_info_mapper import MetricInfoMapper
 from app.repositories.mysql.meta.mappers.table_info_mapper import TableInfoMapper
+
+_METADATA_VERSION_TABLES = {
+    "table_info": "id",
+    "column_info": "id",
+    "metric_info": "id",
+    "column_metric": "column_id, metric_id",
+    "value_alias": "column_id, alias",
+}
+
+
+def build_metadata_cache_version(
+    active_build_version: str | None,
+    table_rows: dict[str, list[dict[str, Any]]],
+) -> str:
+    payload = {
+        "active_build_version": active_build_version or "",
+        "tables": table_rows,
+    }
+    serialized = json.dumps(
+        payload, ensure_ascii=False, sort_keys=True, default=str, separators=(",", ":")
+    )
+    return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
 
 
 class MetaMySQLRepository:
@@ -31,13 +59,17 @@ class MetaMySQLRepository:
         self.session = session
         self._metric_infos_cache: list[MetricInfo] | None = None
         self._column_infos_cache: list[ColumnInfo] | None = None
+        self._value_aliases_cache: list[ValueAlias] | None = None
 
     async def clear_all(self):
         """清空元数据构建产物，让构建脚本可以安全重跑。"""
         self._metric_infos_cache = None
         self._column_infos_cache = None
+        self._value_aliases_cache = None
+        await self._ensure_value_alias_table()
         for table_name in (
             "column_metric",
+            "value_alias",
             "metric_info",
             "column_info",
             "table_info",
@@ -48,6 +80,41 @@ class MetaMySQLRepository:
     async def save_build_version(self, version: str, config_path):
         """记录一次成功构建的元数据版本，保留历史用于排查和回滚决策。"""
 
+        await self._ensure_metadata_build_table()
+        await self.session.execute(
+            text(
+                "insert into metadata_build(version, config_path) "
+                "values (:version, :config_path)"
+            ),
+            {"version": version, "config_path": str(config_path)},
+        )
+        await self.session.commit()
+
+    async def get_active_build_version(self) -> str | None:
+        """读取最近一次成功构建版本，供查询链路作为 RAG 版本边界。"""
+
+        await self._ensure_metadata_build_table()
+        result = await self.session.execute(
+            text("select version from metadata_build order by id desc limit 1")
+        )
+        return result.scalar()
+
+    async def get_metadata_cache_version(self) -> str:
+        """把当前 Meta MySQL 内容折叠成缓存版本，避免直接改库后继续命中旧 LLM 缓存。"""
+
+        active_build_version = await self.get_active_build_version()
+        await self._ensure_value_alias_table()
+        table_rows: dict[str, list[dict[str, Any]]] = {}
+        for table_name, order_by in _METADATA_VERSION_TABLES.items():
+            result = await self.session.execute(
+                text(f"select * from {table_name} order by {order_by}")
+            )
+            table_rows[table_name] = [
+                dict(row) for row in result.mappings().fetchall()
+            ]
+        return build_metadata_cache_version(active_build_version, table_rows)
+
+    async def _ensure_metadata_build_table(self):
         await self.session.execute(
             text(
                 """
@@ -61,14 +128,21 @@ class MetaMySQLRepository:
                 """
             )
         )
+
+    async def _ensure_value_alias_table(self):
         await self.session.execute(
             text(
-                "insert into metadata_build(version, config_path) "
-                "values (:version, :config_path)"
-            ),
-            {"version": version, "config_path": str(config_path)},
+                """
+                create table if not exists value_alias
+                (
+                    column_id varchar(128) not null,
+                    alias varchar(128) not null,
+                    canonical_value varchar(128) not null,
+                    primary key(column_id, alias)
+                )
+                """
+            )
         )
-        await self.session.commit()
 
     def save_table_infos(self, table_infos: list[TableInfo]):
         """批量保存表元数据。输入仍然是业务实体，而不是 ORM 模型"""
@@ -78,12 +152,29 @@ class MetaMySQLRepository:
 
     def save_column_infos(self, column_infos: list[ColumnInfo]):
         """批量保存字段元数据。实体到模型的转换统一通过 Mapper 完成"""
+        self._column_infos_cache = None
         self.session.add_all(
             [ColumnInfoMapper.to_model(column_info) for column_info in column_infos]
         )
 
+    def save_value_aliases(self, value_aliases: list[ValueAlias]):
+        """Persist enum aliases into the metadata catalog."""
+
+        self._value_aliases_cache = None
+        self.session.add_all(
+            [
+                ValueAliasMySQL(
+                    column_id=value_alias.column_id,
+                    alias=value_alias.alias,
+                    canonical_value=value_alias.canonical_value,
+                )
+                for value_alias in value_aliases
+            ]
+        )
+
     def save_metric_infos(self, metric_infos: list[MetricInfo]):
         """批量保存指标元数据。指标本身和字段关联关系分开写入"""
+        self._metric_infos_cache = None
         self.session.add_all(
             [MetricInfoMapper.to_model(metric_info) for metric_info in metric_infos]
         )
@@ -155,3 +246,21 @@ class MetaMySQLRepository:
             for row in result.mappings().fetchall()
         ]
         return self._column_infos_cache
+
+    async def list_value_aliases(self) -> list[ValueAlias]:
+        """Query enum aliases from the active metadata catalog."""
+
+        if self._value_aliases_cache is not None:
+            return self._value_aliases_cache
+
+        await self._ensure_value_alias_table()
+        result = await self.session.execute(text("select * from value_alias"))
+        self._value_aliases_cache = [
+            ValueAlias(
+                column_id=str(row["column_id"]),
+                alias=str(row["alias"]),
+                canonical_value=str(row["canonical_value"]),
+            )
+            for row in result.mappings().fetchall()
+        ]
+        return self._value_aliases_cache

@@ -3,7 +3,14 @@
 from dataclasses import fields
 
 from qdrant_client import AsyncQdrantClient
-from qdrant_client.models import Distance, PointStruct, VectorParams
+from qdrant_client.models import (
+    Distance,
+    FieldCondition,
+    Filter,
+    MatchValue,
+    PointStruct,
+    VectorParams,
+)
 
 from app.conf.app_config import app_config
 from app.entities.value_info import ValueInfo
@@ -52,13 +59,18 @@ class ValueQdrantRepository:
             )
 
     async def search(
-        self, embedding: list[float], score_threshold: float = 0.5, limit: int = 20
+        self,
+        embedding: list[float],
+        score_threshold: float = 0.5,
+        limit: int = 20,
+        meta_build_version: str | None = None,
     ) -> list[ValueInfo]:
         result = await self.client.query_points(
             collection_name=self.collection_name,
             query=embedding,
             limit=limit,
             score_threshold=score_threshold,
+            query_filter=_meta_build_filter(meta_build_version),
         )
         return [
             ValueInfo(
@@ -70,3 +82,16 @@ class ValueQdrantRepository:
             )
             for point in result.points
         ]
+
+
+def _meta_build_filter(meta_build_version: str | None) -> Filter | None:
+    if not meta_build_version:
+        return None
+    return Filter(
+        must=[
+            FieldCondition(
+                key="meta_build_version",
+                match=MatchValue(value=meta_build_version),
+            )
+        ]
+    )

@@ -29,6 +29,7 @@ class ValueESRepository:
                 "search_analyzer": "ik_max_word",
             },
             "column_id": {"type": "keyword"},
+            "meta_build_version": {"type": "keyword"},
         },
     }
 
@@ -49,7 +50,12 @@ class ValueESRepository:
             await self.client.indices.delete(index=self.index_name)
         await self.ensure_index()
 
-    async def index(self, value_infos: list[ValueInfo], batch_size=20):
+    async def index(
+        self,
+        value_infos: list[ValueInfo],
+        batch_size=20,
+        meta_build_version: str | None = None,
+    ):
         """分批写入字段取值，避免一次 bulk 过大"""
         if not value_infos:
             return
@@ -62,21 +68,50 @@ class ValueESRepository:
                 batch_operations.append(
                     {"index": {"_index": self.index_name, "_id": value_info.id}}
                 )
-                batch_operations.append(asdict(value_info))
+                batch_operations.append(
+                    {**asdict(value_info), "meta_build_version": meta_build_version}
+                )
             await self.client.bulk(operations=batch_operations)
 
     async def search(
-        self, keyword: str, score_threshold: float = 0.6, limit: int = 20
+        self,
+        keyword: str,
+        score_threshold: float = 0.6,
+        limit: int = 20,
+        meta_build_version: str | None = None,
     ) -> list[ValueInfo]:
         """按关键词全文检索字段取值，并还原为 ValueInfo 实体"""
 
         resp = await self.client.search(
             index=self.index_name,
             # value 字段启用了 IK 分词，match 查询可以处理中文短语和枚举值匹配
-            query={"match": {"value": keyword}},
+            query=_value_query(keyword, meta_build_version),
             size=limit,
             # 过滤掉相关度过低的命中，避免把明显无关的取值带入后续上下文
             min_score=score_threshold,
         )
         # ES 文档 _source 中保存的是 ValueInfo 的字段结构，业务层继续使用实体对象
-        return [ValueInfo(**hit["_source"]) for hit in resp["hits"]["hits"]]
+        return [
+            ValueInfo(
+                **{
+                    key: value
+                    for key, value in hit["_source"].items()
+                    if key in {"id", "value", "column_id"}
+                }
+            )
+            for hit in resp["hits"]["hits"]
+        ]
+
+
+def _value_query(keyword: str, meta_build_version: str | None) -> dict:
+    match_query = {"match": {"value": keyword}}
+    if not meta_build_version:
+        return match_query
+    return {
+        "bool": {
+            "must": [
+                match_query,
+                {"term": {"meta_build_version": meta_build_version}},
+            ]
+        }
+    }

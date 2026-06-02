@@ -15,12 +15,14 @@ from pathlib import Path
 from langchain_core.embeddings import Embeddings
 from omegaconf import OmegaConf
 
+from app.agent.llm_usage import clear_llm_response_cache
 from app.conf.meta_config import MetaConfig
 from app.core.log import logger
 from app.entities.column_info import ColumnInfo
 from app.entities.column_metric import ColumnMetric
 from app.entities.metric_info import MetricInfo
 from app.entities.table_info import TableInfo
+from app.entities.value_alias import ValueAlias
 from app.entities.value_info import ValueInfo
 from app.repositories.es.value_es_repository import ValueESRepository
 from app.repositories.mysql.dw.dw_mysql_repository import DWMySQLRepository
@@ -99,8 +101,23 @@ class MetaKnowledgeService:
         async with self.meta_mysql_repository.session.begin():
             self.meta_mysql_repository.save_table_infos(table_infos)
             self.meta_mysql_repository.save_column_infos(column_infos)
+            self._save_value_aliases_to_meta_db(meta_config)
 
         return column_infos
+
+    def _save_value_aliases_to_meta_db(self, meta_config: MetaConfig):
+        """Persist configured enum aliases into Meta MySQL."""
+
+        value_aliases = [
+            ValueAlias(
+                column_id=item.column,
+                alias=str(alias),
+                canonical_value=str(canonical_value),
+            )
+            for item in meta_config.value_aliases or []
+            for alias, canonical_value in item.aliases.items()
+        ]
+        self.meta_mysql_repository.save_value_aliases(value_aliases)
 
     async def _save_column_info_to_qdrant(
         self, column_infos: list[ColumnInfo], build_version: str
@@ -204,10 +221,14 @@ class MetaKnowledgeService:
 
         return value_infos
 
-    async def _save_value_info_to_es(self, value_infos: list[ValueInfo]):
+    async def _save_value_info_to_es(
+        self, value_infos: list[ValueInfo], build_version: str
+    ):
         """把允许同步的字段真实取值写入 Elasticsearch 全文索引"""
         await self.value_es_repository.recreate_index()
-        await self.value_es_repository.index(value_infos)
+        await self.value_es_repository.index(
+            value_infos, meta_build_version=build_version
+        )
 
     async def _save_value_info_to_qdrant(
         self, value_infos: list[ValueInfo], build_version: str
@@ -359,7 +380,7 @@ class MetaKnowledgeService:
             logger.info("为字段信息建立向量索引")
             # 对指定的维度字段取值建立全文索引和向量索引
             value_infos = await self._build_value_infos(meta_config, column_infos)
-            await self._save_value_info_to_es(value_infos)
+            await self._save_value_info_to_es(value_infos, build_version)
             await self._save_value_info_to_qdrant(value_infos, build_version)
             logger.info("为字段取值建立全文索引和向量索引")
         else:
@@ -382,6 +403,7 @@ class MetaKnowledgeService:
             logger.info("指标配置为空，已清空指标向量索引")
 
         await self.meta_mysql_repository.save_build_version(build_version, config_path)
+        clear_llm_response_cache()
         logger.info(f"记录元数据构建版本：{build_version}")
 
     @staticmethod

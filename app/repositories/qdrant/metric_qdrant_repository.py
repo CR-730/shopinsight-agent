@@ -10,7 +10,14 @@
 from dataclasses import fields
 
 from qdrant_client import AsyncQdrantClient
-from qdrant_client.models import Distance, PointStruct, VectorParams
+from qdrant_client.models import (
+    Distance,
+    FieldCondition,
+    Filter,
+    MatchValue,
+    PointStruct,
+    VectorParams,
+)
 
 from app.conf.app_config import app_config
 from app.entities.metric_info import MetricInfo
@@ -64,7 +71,11 @@ class MetricQdrantRepository:
             )
 
     async def search(
-        self, embedding: list[float], score_threshold: float = 0.6, limit: int = 20
+        self,
+        embedding: list[float],
+        score_threshold: float = 0.6,
+        limit: int = 20,
+        meta_build_version: str | None = None,
     ) -> list[MetricInfo]:
         """按向量相似度检索指标元数据，并还原为 MetricInfo 实体"""
 
@@ -73,6 +84,7 @@ class MetricQdrantRepository:
             query=embedding,
             limit=limit,
             score_threshold=score_threshold,
+            query_filter=_meta_build_filter(meta_build_version),
         )
         # Qdrant point 的 payload 中保存的是指标元数据，业务层继续使用 MetricInfo
         return [
@@ -85,3 +97,16 @@ class MetricQdrantRepository:
             )
             for point in result.points
         ]
+
+
+def _meta_build_filter(meta_build_version: str | None) -> Filter | None:
+    if not meta_build_version:
+        return None
+    return Filter(
+        must=[
+            FieldCondition(
+                key="meta_build_version",
+                match=MatchValue(value=meta_build_version),
+            )
+        ]
+    )

@@ -168,9 +168,15 @@ metrics:
     description: 全称Gross Merchandise Value，表示所有订单的成交金额总和。
     relevant_columns:
       - fact_order.order_amount
-    alias: [成交总额, 订单总额]
+    alias: [成交总额, 订单总额, 销售额, 成交额, 销售总额, 销售金额, 订单金额]
   - name: AOV
     description: 全称Average Order Value，表示所有订单的成交金额平均值。
     relevant_columns:
       - fact_order.order_amount
     alias: [客单价, 平均单价, 平均订单金额]
+
+value_aliases:
+  - column: dim_region.region_name
+    aliases:
+      北方: 华北
+      北方区域: 华北

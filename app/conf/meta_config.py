@@ -51,6 +51,14 @@ class MetricConfig:
 
 
 @dataclass
+class ValueAliasConfig:
+    """Business aliases for real enum values in a catalog column."""
+
+    column: str
+    aliases: dict[str, str]
+
+
+@dataclass
 class MetaConfig:
     """
     元数据知识构建总配置
@@ -59,3 +67,4 @@ class MetaConfig:
 
     tables: Optional[list[TableConfig]] = None
     metrics: Optional[list[MetricConfig]] = None
+    value_aliases: Optional[list[ValueAliasConfig]] = None
