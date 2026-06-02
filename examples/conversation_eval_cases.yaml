@@ -1,0 +1,58 @@
+- id: conv_followup_time_change
+  suite: regression
+  difficulty: medium
+  capabilities:
+    - conversation_memory
+    - followup_rewrite
+    - sql_generation
+  tags:
+    - multiturn
+    - time_followup
+  risk_points:
+    - 追问只说时间变化时必须继承上一轮指标和地区过滤
+  turns:
+    - query: 统计华北地区 2025 年第一季度 GMV
+      expected_rewritten_query: 统计华北地区 2025 年第一季度 GMV
+    - query: 那上个月呢
+      expected_rewritten_contains:
+        - GMV
+        - 华北
+        - 那上个月呢
+
+- id: conv_followup_metric_change
+  suite: regression
+  difficulty: medium
+  capabilities:
+    - conversation_memory
+    - followup_rewrite
+    - business_binding
+  tags:
+    - multiturn
+    - metric_focus_change
+  risk_points:
+    - 用户换指标时不能丢失上一轮时间和过滤条件
+  turns:
+    - query: 统计华东地区 2025 年 3 月订单数
+      expected_rewritten_query: 统计华东地区 2025 年 3 月订单数
+    - query: 换成销售额
+      expected_rewritten_contains:
+        - 华东
+        - 换成销售额
+
+- id: conv_blocked_turn_does_not_update_snapshot
+  suite: adversarial
+  difficulty: hard
+  capabilities:
+    - conversation_memory
+    - safety
+  tags:
+    - multiturn
+    - blocked_snapshot
+  risk_points:
+    - 被 semantic_guard 拦截的轮次不能覆盖上一轮成功快照
+  turns:
+    - query: 统计华北地区 GMV
+      expected_snapshot_metric: GMV
+    - query: 统计不存在指标
+      expected_blocked_by: semantic_guard
+      expected_snapshot_unchanged: true

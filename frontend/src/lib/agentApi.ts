@@ -8,6 +8,7 @@ const API_BASE_URL = import.meta.env.VITE_API_BASE_URL?.replace(/\/$/, "") ?? ""
 
 type QueryOptions = {
   signal?: AbortSignal;
+  conversationId?: string | null;
   onEvent: (event: AgentEvent) => void;
 };
 
@@ -18,7 +19,10 @@ export async function streamQuery(query: string, options: QueryOptions) {
       "Content-Type": "application/json",
       Accept: "text/event-stream",
     },
-    body: JSON.stringify({ query }),
+    body: JSON.stringify({
+      query,
+      conversation_id: options.conversationId ?? undefined,
+    }),
     signal: options.signal,
   });
 

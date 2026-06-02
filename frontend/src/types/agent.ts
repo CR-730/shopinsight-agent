@@ -38,7 +38,18 @@ export type UsageEvent = {
   data: UsageSummary;
 };
 
-export type AgentEvent = ProgressEvent | ResultEvent | ErrorEvent | UsageEvent;
+export type ConversationEvent = {
+  type: "conversation";
+  conversation_id: string;
+  rewritten_query: string;
+};
+
+export type AgentEvent =
+  | ProgressEvent
+  | ResultEvent
+  | ErrorEvent
+  | UsageEvent
+  | ConversationEvent;
 
 export type StepState = {
   step: string;
@@ -56,4 +67,6 @@ export type ChatMessage = {
   result?: unknown;
   error?: string;
   usage?: UsageSummary;
+  conversationId?: string;
+  rewrittenQuery?: string;
 };

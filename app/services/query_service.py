@@ -19,10 +19,18 @@ from app.agent.llm_usage import (
     set_llm_cache_context_namespace,
     set_llm_request_call_budget,
 )
+from app.agent.memory import (
+    build_answer_summary,
+    build_snapshot_from_state,
+    rewrite_followup_query,
+)
 from app.agent.state import DataAgentState
 from app.conf.app_config import app_config
 from app.repositories.es.value_es_repository import ValueESRepository
 from app.repositories.mysql.dw.dw_mysql_repository import DWMySQLRepository
+from app.repositories.mysql.meta.conversation_memory_repository import (
+    ConversationMemoryRepository,
+)
 from app.repositories.mysql.meta.meta_mysql_repository import MetaMySQLRepository
 from app.repositories.qdrant.column_qdrant_repository import ColumnQdrantRepository
 from app.repositories.qdrant.metric_qdrant_repository import MetricQdrantRepository
@@ -41,6 +49,7 @@ class QueryService:
         metric_qdrant_repository: MetricQdrantRepository,
         value_es_repository: ValueESRepository,
         value_qdrant_repository: ValueQdrantRepository,
+        conversation_memory_repository: ConversationMemoryRepository,
     ):
         # MySQL 仓储分别负责元数据补全和真实数仓环境信息读取
         self.meta_mysql_repository = meta_mysql_repository
@@ -52,13 +61,43 @@ class QueryService:
         self.metric_qdrant_repository = metric_qdrant_repository
         self.value_es_repository = value_es_repository
         self.value_qdrant_repository = value_qdrant_repository
+        self.conversation_memory_repository = conversation_memory_repository
 
-    async def query(self, query: str):
+    async def query(
+        self,
+        query: str,
+        conversation_id: str | None = None,
+        user_id: str | None = None,
+    ):
         """执行一次问数工作流，并逐段产出 SSE 消息"""
+
+        if conversation_id:
+            conversation = await self.conversation_memory_repository.get_conversation(
+                conversation_id, user_id
+            )
+            if conversation is None:
+                conversation_id = None
+
+        if not conversation_id:
+            conversation_id = (
+                await self.conversation_memory_repository.create_conversation(
+                    user_id=user_id, first_query=query
+                )
+            )
+        snapshot = await self.conversation_memory_repository.get_snapshot(
+            conversation_id, user_id
+        )
+        rewritten_query = rewrite_followup_query(query, snapshot)
+        conversation_event = {
+            "type": "conversation",
+            "conversation_id": conversation_id,
+            "rewritten_query": rewritten_query,
+        }
+        yield f"data: {json.dumps(conversation_event, ensure_ascii=False, default=str)}\n\n"
 
         # State 只放会被图节点读写和合并的业务数据，外部工具对象不塞进 State
         state = DataAgentState(
-            query=query,
+            query=rewritten_query,
             correction_attempts=0,
             max_correction_attempts=app_config.agent.max_sql_correction_attempts,
         )
@@ -95,14 +134,39 @@ class QueryService:
         call_budget_token = set_llm_request_call_budget(
             app_config.llm.max_calls_per_request
         )
+        final_state: dict | None = None
         try:
             # stream_mode="custom" 对应节点内部 writer(...) 写出的进度消息
             async for chunk in graph.astream(
-                input=state, context=context, stream_mode="custom"
+                input=state, context=context, stream_mode=["custom", "values"]
             ):
+                if isinstance(chunk, tuple) and len(chunk) == 2:
+                    mode, payload = chunk
+                    if mode == "values":
+                        final_state = dict(payload)
+                        continue
+                    if mode == "custom":
+                        chunk = payload
                 # SSE 要求每条消息以 data: 开头，并以两个换行符结束
                 # ensure_ascii=False 保留中文进度文案，default=str 兜底处理日期等非 JSON 类型
                 yield f"data: {json.dumps(chunk, ensure_ascii=False, default=str)}\n\n"
+            if final_state is not None:
+                final_answer_summary = build_answer_summary(
+                    final_state.get("final_answer")
+                )
+                await self.conversation_memory_repository.save_turn(
+                    conversation_id=conversation_id,
+                    user_id=user_id,
+                    user_query=query,
+                    rewritten_query=rewritten_query,
+                    final_state=final_state,
+                    final_answer_summary=final_answer_summary,
+                )
+                memory_snapshot = build_snapshot_from_state(final_state)
+                if memory_snapshot is not None:
+                    await self.conversation_memory_repository.upsert_snapshot(
+                        conversation_id, user_id, memory_snapshot
+                    )
             usage = {"type": "usage", "data": cost_tracker.summary()}
             yield f"data: {json.dumps(usage, ensure_ascii=False, default=str)}\n\n"
         except Exception as e:

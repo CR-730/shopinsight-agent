@@ -45,6 +45,7 @@ function upsertStep(steps: StepState[] = [], event: Extract<AgentEvent, { type: 
 export default function App() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [draft, setDraft] = useState("");
+  const [conversationId, setConversationId] = useState<string | null>(null);
   const [activeController, setActiveController] = useState<AbortController | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
 
@@ -94,6 +95,15 @@ export default function App() {
         current.map((message) => {
           if (message.id !== assistantId) return message;
 
+          if (event.type === "conversation") {
+            setConversationId(event.conversation_id);
+            return {
+              ...message,
+              conversationId: event.conversation_id,
+              rewrittenQuery: event.rewritten_query,
+            };
+          }
+
           if (event.type === "progress") {
             return {
               ...message,
@@ -129,7 +139,7 @@ export default function App() {
     };
 
     try {
-      await streamQuery(query, { signal: controller.signal, onEvent });
+      await streamQuery(query, { signal: controller.signal, conversationId, onEvent });
       setMessages((current) =>
         current.map((message) =>
           message.id === assistantId && message.status === "streaming"
@@ -164,6 +174,7 @@ export default function App() {
     if (isStreaming) return;
     setMessages([]);
     setDraft("");
+    setConversationId(null);
   };
 
   return (

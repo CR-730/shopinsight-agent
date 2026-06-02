@@ -55,3 +55,44 @@ CREATE TABLE metadata_build
     config_path VARCHAR(512) NOT NULL COMMENT '构建配置文件路径',
     created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '构建完成时间'
 );
+
+DROP TABLE IF EXISTS conversation_snapshot;
+DROP TABLE IF EXISTS conversation_turn;
+DROP TABLE IF EXISTS conversation;
+
+CREATE TABLE conversation
+(
+    id          VARCHAR(64) PRIMARY KEY COMMENT '会话编号',
+    user_id     VARCHAR(128) NULL COMMENT '用户编号',
+    title       VARCHAR(255) NOT NULL COMMENT '会话标题',
+    created_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+    updated_at  TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+    archived_at TIMESTAMP NULL COMMENT '归档时间'
+);
+
+CREATE TABLE conversation_turn
+(
+    id                   VARCHAR(64) PRIMARY KEY COMMENT '轮次编号',
+    conversation_id      VARCHAR(64) NOT NULL COMMENT '会话编号',
+    turn_index           INT NOT NULL COMMENT '会话内轮次序号',
+    user_query           TEXT NOT NULL COMMENT '用户原始问题',
+    rewritten_query      TEXT NOT NULL COMMENT '追问改写后的完整问题',
+    sql_text             TEXT NULL COMMENT '本轮生成或修正后的 SQL',
+    final_answer_summary TEXT NULL COMMENT '查询结果摘要',
+    safety_error         TEXT NULL COMMENT '安全或业务语义错误',
+    blocked_by           VARCHAR(64) NULL COMMENT '拦截节点',
+    created_at           TIMESTAMP DEFAULT CURRENT_TIMESTAMP COMMENT '创建时间',
+    INDEX idx_conversation_turn_conversation (conversation_id, turn_index)
+);
+
+CREATE TABLE conversation_snapshot
+(
+    conversation_id       VARCHAR(64) PRIMARY KEY COMMENT '会话编号',
+    last_metric_bindings  JSON NULL COMMENT '上一轮指标绑定快照',
+    last_resolved_filters JSON NULL COMMENT '上一轮过滤条件绑定快照',
+    last_time_binding     JSON NULL COMMENT '上一轮时间绑定快照',
+    last_sql              TEXT NULL COMMENT '上一轮 SQL',
+    last_answer_summary   TEXT NULL COMMENT '上一轮结果摘要',
+    recent_turns_summary  JSON NULL COMMENT '最近轮次摘要',
+    updated_at            TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间'
+);
