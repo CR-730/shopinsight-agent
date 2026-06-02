@@ -41,6 +41,8 @@ class EvalCase:
     expected_sql_contains: list[str] = field(default_factory=list)
     expected_columns: list[str] = field(default_factory=list)
     expected_metrics: list[str] = field(default_factory=list)
+    expected_time_binding: dict[str, Any] | None = None
+    expected_unresolved_binding: dict[str, Any] | None = None
     expected_result: Any = None
     expected_blocked_by: str | None = None
     forbidden_sql: list[str] = field(default_factory=list)
@@ -134,6 +136,12 @@ def build_trace(state: dict[str, Any]) -> dict[str, Any]:
         "retrieved_values": retrieved_values,
         "filtered_columns": filtered_columns,
         "filtered_metrics": filtered_metrics,
+        "metric_bindings": state.get("metric_bindings") or [],
+        "resolved_filters": state.get("resolved_filters") or [],
+        "business_binding": state.get("business_binding") or {},
+        "time_binding": state.get("time_binding"),
+        "unresolved_bindings": state.get("unresolved_bindings") or [],
+        "ambiguous_bindings": state.get("ambiguous_bindings") or [],
         "generated_sql": generated_sql,
         "sql_error": sql_error,
         "safety_error": safety_error,
@@ -261,6 +269,29 @@ def _evaluate_failures(case: EvalCase, trace: dict[str, Any]) -> list[EvalFailur
                 )
             )
 
+    if case.expected_time_binding:
+        time_binding = trace.get("time_binding") or {}
+        for key, expected_value in case.expected_time_binding.items():
+            if time_binding.get(key) != expected_value:
+                failures.append(
+                    EvalFailure(
+                        code="missing_expected_time_binding",
+                        message=f"时间绑定不匹配：{key}={expected_value}",
+                        stage="context_filter",
+                    )
+                )
+
+    if case.expected_unresolved_binding and not _has_expected_binding_issue(
+        trace["unresolved_bindings"], case.expected_unresolved_binding
+    ):
+        failures.append(
+            EvalFailure(
+                code="missing_expected_unresolved_binding",
+                message=f"缺少预期未解析业务绑定：{case.expected_unresolved_binding}",
+                stage="safety",
+            )
+        )
+
     for tool in case.must_call_tools:
         if tool not in trace["tool_calls"]:
             failures.append(
@@ -288,6 +319,15 @@ def _evaluate_failures(case: EvalCase, trace: dict[str, Any]) -> list[EvalFailur
             )
 
     return failures
+
+
+def _has_expected_binding_issue(
+    issues: list[dict[str, Any]], expected: dict[str, Any]
+) -> bool:
+    for issue in issues:
+        if all(issue.get(key) == value for key, value in expected.items()):
+            return True
+    return False
 
 
 def _first_failure_stage(failures: list[EvalFailure]) -> FailureStage | None:

@@ -6,7 +6,7 @@ from langchain_core.prompts import PromptTemplate
 from langgraph.runtime import Runtime
 
 from app.agent.context import DataAgentContext
-from app.agent.llm import sql_llm
+from app.agent.llm import generate_sql_llm
 from app.agent.llm_usage import ainvoke_llm_with_usage
 from app.agent.state import DataAgentState
 from app.conf.app_config import app_config
@@ -24,6 +24,14 @@ async def generate_sql(state: DataAgentState, runtime: Runtime[DataAgentContext]
     try:
         table_infos = state["table_infos"]
         metric_infos = state["metric_infos"]
+        business_binding = state.get("business_binding") or {
+            "metrics": state.get("metric_bindings") or [],
+            "filters": state.get("resolved_filters") or [],
+            "time": state.get("time_binding"),
+            "unresolved": state.get("unresolved_bindings") or [],
+            "ambiguous": state.get("ambiguous_bindings") or [],
+        }
+        validated_enum_values = state.get("validated_enum_values") or []
         date_info = state["date_info"]
         db_info = state["db_info"]
         query = state["query"]
@@ -33,6 +41,7 @@ async def generate_sql(state: DataAgentState, runtime: Runtime[DataAgentContext]
             input_variables=[
                 "table_infos",
                 "metric_infos",
+                "business_bindings",
                 "date_info",
                 "db_info",
                 "query",
@@ -42,7 +51,7 @@ async def generate_sql(state: DataAgentState, runtime: Runtime[DataAgentContext]
 
         result = await ainvoke_llm_with_usage(
             prompt,
-            sql_llm,
+            generate_sql_llm,
             output_parser,
             {
                 "table_infos": yaml.dump(
@@ -50,6 +59,14 @@ async def generate_sql(state: DataAgentState, runtime: Runtime[DataAgentContext]
                 ),
                 "metric_infos": yaml.dump(
                     metric_infos, allow_unicode=True, sort_keys=False
+                ),
+                "business_bindings": yaml.dump(
+                    {
+                        "business_binding": business_binding,
+                        "validated_enum_values": validated_enum_values,
+                    },
+                    allow_unicode=True,
+                    sort_keys=False,
                 ),
                 "date_info": yaml.dump(date_info, allow_unicode=True, sort_keys=False),
                 "db_info": yaml.dump(db_info, allow_unicode=True, sort_keys=False),

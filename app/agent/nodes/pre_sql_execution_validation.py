@@ -37,6 +37,12 @@ async def pre_sql_execution_validation(
         writer({"type": "progress", "step": step, "status": "repairable_error"})
         return {"sql": sql, "error": parse_error, "safety_error": None}
 
+    structure_error = validate_sql_structure_semantics(state, sql)
+    if structure_error:
+        logger.info(f"{step} repairable SQL structure error: {structure_error}")
+        writer({"type": "progress", "step": step, "status": "repairable_error"})
+        return {"sql": sql, "error": structure_error, "safety_error": None}
+
     try:
         await dw_mysql_repository.validate(sql)
     except Exception as exc:
@@ -123,11 +129,17 @@ def validate_sql_before_execution(state: dict[str, Any], sql: str) -> str | None
     if _looks_like_detail_query(expression, lowered_query):
         return "禁止执行用户或订单明细查询"
 
-    fabricated_metric = _fabricated_metric_alias(state, expression)
-    if fabricated_metric:
-        return f"SQL 编造了未注册指标别名：{fabricated_metric}"
-
     return None
+
+
+def validate_sql_structure_semantics(
+    state: dict[str, Any],
+    sql: str,
+) -> str | None:
+    parsed_sql = _parse_single_select(sql.strip())
+    if isinstance(parsed_sql, str):
+        return parsed_sql
+    return _invalid_join_relationship(state, parsed_sql)
 
 
 def _parse_single_select(sql: str) -> exp.Expression | str:
@@ -145,6 +157,141 @@ def _parse_single_select(sql: str) -> exp.Expression | str:
     return expression
 
 
+def _invalid_join_relationship(
+    state: dict[str, Any],
+    expression: exp.Expression,
+) -> str | None:
+    column_catalog = _column_catalog(state)
+    if not column_catalog:
+        return None
+
+    alias_to_table = _table_aliases(expression)
+    for join in expression.find_all(exp.Join):
+        condition = join.args.get("on")
+        if condition is None:
+            continue
+        for predicate in condition.find_all(exp.EQ):
+            if not isinstance(predicate.left, exp.Column) or not isinstance(
+                predicate.right, exp.Column
+            ):
+                continue
+            left = _resolved_column(predicate.left, alias_to_table, column_catalog)
+            right = _resolved_column(predicate.right, alias_to_table, column_catalog)
+            if left is None or right is None or left["table"] == right["table"]:
+                continue
+            if _is_valid_join_pair(left, right):
+                continue
+
+            candidate = _candidate_join_relationship(left, right, column_catalog)
+            message = f"JOIN 条件不符合元数据关系：{left['id']} = {right['id']}。"
+            if candidate:
+                message += f"候选正确关系：{candidate}。"
+            return message
+    return None
+
+
+def _table_aliases(expression: exp.Expression) -> dict[str, str]:
+    aliases = {}
+    for table in expression.find_all(exp.Table):
+        table_name = table.name
+        aliases[table_name] = table_name
+        if table.alias:
+            aliases[table.alias] = table_name
+    return aliases
+
+
+def _column_catalog(state: dict[str, Any]) -> dict[str, dict[str, str]]:
+    catalog: dict[str, dict[str, str]] = {}
+    for table in state.get("table_infos") or []:
+        table_name = _field_value(table, "name")
+        if not table_name:
+            continue
+        table_role = _field_value(table, "role") or ""
+        for column in _field_value(table, "columns") or []:
+            column_name = _field_value(column, "name")
+            if not column_name:
+                continue
+            _put_column_catalog(
+                catalog,
+                table_name=table_name,
+                column_name=column_name,
+                column_role=_field_value(column, "role") or "",
+                table_role=table_role,
+            )
+
+    for column in state.get("retrieved_column_infos") or []:
+        table_name = _field_value(column, "table_id")
+        column_name = _field_value(column, "name")
+        if not table_name or not column_name:
+            continue
+        _put_column_catalog(
+            catalog,
+            table_name=table_name,
+            column_name=column_name,
+            column_role=_field_value(column, "role") or "",
+            table_role="",
+        )
+    return catalog
+
+
+def _put_column_catalog(
+    catalog: dict[str, dict[str, str]],
+    *,
+    table_name: str,
+    column_name: str,
+    column_role: str,
+    table_role: str,
+):
+    column_id = f"{table_name}.{column_name}".lower()
+    existing = catalog.get(column_id, {})
+    catalog[column_id] = {
+        "id": f"{table_name}.{column_name}",
+        "table": table_name,
+        "name": column_name,
+        "role": column_role or existing.get("role", ""),
+        "table_role": table_role or existing.get("table_role", ""),
+    }
+
+
+def _field_value(item: Any, field: str) -> Any:
+    if isinstance(item, dict):
+        return item.get(field)
+    return getattr(item, field, None)
+
+
+def _resolved_column(
+    column: exp.Column,
+    alias_to_table: dict[str, str],
+    catalog: dict[str, dict[str, str]],
+) -> dict[str, str] | None:
+    table = column.table
+    if not table:
+        return None
+    table_name = alias_to_table.get(table, table)
+    return catalog.get(f"{table_name}.{column.name}".lower())
+
+
+def _is_valid_join_pair(left: dict[str, str], right: dict[str, str]) -> bool:
+    if left["name"].lower() != right["name"].lower():
+        return False
+    roles = {left["role"], right["role"]}
+    return "foreign_key" in roles and "primary_key" in roles
+
+
+def _candidate_join_relationship(
+    left: dict[str, str],
+    right: dict[str, str],
+    catalog: dict[str, dict[str, str]],
+) -> str | None:
+    for foreign_key, other in ((left, right), (right, left)):
+        if foreign_key["role"] != "foreign_key":
+            continue
+        primary_key = catalog.get(f"{other['table']}.{foreign_key['name']}".lower())
+        if primary_key and primary_key["role"] == "primary_key":
+            return f"{foreign_key['id']} = {primary_key['id']}"
+    return None
+
+
 def _has_select_star(expression: exp.Expression) -> bool:
     return any(not _is_aggregate_star(star) for star in expression.find_all(exp.Star))
 
@@ -158,14 +305,31 @@ def _sensitive_column(expression: exp.Expression) -> str | None:
     sql_policy = load_policy_config().get("sql", {})
     sensitive_column_ids = set(sql_policy.get("sensitive_columns", []))
     sensitive_names = set(sql_policy.get("sensitive_column_names", []))
-    for projection in expression.expressions:
-        for column in projection.find_all(exp.Column):
-            sensitive = _sensitive_column_name(
-                column, sensitive_column_ids, sensitive_names
-            )
-            if sensitive:
-                return sensitive
+    allowed_join_key_names = set(sql_policy.get("allowed_sensitive_join_key_names", []))
+    for column in expression.find_all(exp.Column):
+        if _is_allowed_sensitive_join_key(column, allowed_join_key_names):
+            continue
+        sensitive = _sensitive_column_name(column, sensitive_column_ids, sensitive_names)
+        if sensitive:
+            return sensitive
     return None
+
+
+def _is_allowed_sensitive_join_key(
+    column: exp.Column,
+    allowed_join_key_names: set[str],
+) -> bool:
+    if column.name.lower() not in allowed_join_key_names:
+        return False
+    node = column.parent
+    while node is not None:
+        if isinstance(node, exp.Join):
+            condition = node.args.get("on")
+            return condition is not None and any(
+                candidate is column for candidate in condition.find_all(exp.Column)
+            )
+        node = node.parent
+    return False
 
 
 def _sensitive_column_name(
@@ -190,19 +354,37 @@ def _unknown_literal_value(
         for value_info in state.get("retrieved_value_infos") or []
         if getattr(value_info, "value", None)
     }
+    known_literals.update(str(value) for value in state.get("validated_enum_values") or [])
+    known_literals.update(
+        str(literal)
+        for resolved_filter in state.get("resolved_filters") or []
+        for literal in resolved_filter.get("allowed_sql_literals", [])
+    )
     for literal_expression in expression.find_all(exp.Literal):
         if not literal_expression.is_string:
             continue
         literal = str(literal_expression.this)
+        if _looks_like_temporal_literal(literal):
+            continue
         if _looks_like_business_literal(literal) and literal not in known_literals:
             return literal
     return None
 
 
+def _looks_like_temporal_literal(literal: str) -> bool:
+    return bool(
+        re.fullmatch(r"\d{4}-\d{1,2}-\d{1,2}", literal)
+        or re.fullmatch(r"\d{4}/\d{1,2}/\d{1,2}", literal)
+        or re.fullmatch(r"\d{8}", literal)
+        or re.fullmatch(r"\d{4}", literal)
+        or re.fullmatch(r"q[1-4]", literal.lower())
+    )
+
+
 def _looks_like_business_literal(literal: str) -> bool:
     if re.fullmatch(r"\d+(\.\d+)?", literal):
         return False
-    if re.fullmatch(r"q[1-4]", literal.lower()):
+    if _looks_like_temporal_literal(literal):
         return False
     return True
 
@@ -222,23 +404,3 @@ def _has_aggregate(expression: exp.Expression) -> bool:
     aggregate_nodes = (exp.Sum, exp.Count, exp.Avg, exp.Min, exp.Max)
     return any(True for _ in expression.find_all(*aggregate_nodes))
 
-
-def _fabricated_metric_alias(
-    state: dict[str, Any],
-    expression: exp.Expression,
-) -> str | None:
-    registered_metric_names = {
-        metric.get("name") if isinstance(metric, dict) else getattr(metric, "name", None)
-        for metric in state.get("metric_infos") or []
-    }
-    registered_metric_names.discard(None)
-    allowed_aliases = set(registered_metric_names)
-    allowed_aliases.update(
-        load_policy_config().get("sql", {}).get("allowed_metric_aliases", [])
-    )
-
-    for alias_expression in expression.find_all(exp.Alias):
-        alias = alias_expression.alias
-        if "指数" in alias and alias not in allowed_aliases:
-            return alias
-    return None

@@ -60,6 +60,63 @@ class DBInfoState(TypedDict):
     version: str
 
 
+class MetricBindingState(TypedDict):
+    """Canonical metric resolved from user language and metric catalog."""
+
+    raw_mention: str
+    canonical_metric: str
+    matched_by: str
+    evidence: str
+    relevant_columns: list[str]
+    confidence: str
+
+
+class ResolvedFilterState(TypedDict):
+    """Canonical enum filter resolved from user language and value catalog."""
+
+    raw_value: str
+    canonical_value: str
+    column: str
+    field_alias: str
+    matched_by: str
+    allowed_sql_literals: list[str]
+
+
+class TimeBindingState(TypedDict, total=False):
+    """Structured time constraint resolved from user language."""
+
+    raw_text: str
+    grain: str
+    year: int
+    quarter: str
+    month: int
+    start_date: str
+    end_date: str
+    start_date_id: int
+    end_date_id: int
+    strategy: str
+    required_columns: list[str]
+
+
+class BindingIssueState(TypedDict):
+    """Unresolved or ambiguous business object found during binding."""
+
+    type: str
+    raw_text: str
+    reason: str
+    candidate_column: str
+
+
+class BusinessBindingState(TypedDict):
+    """Single business binding object produced by business_binding."""
+
+    metrics: list[MetricBindingState]
+    filters: list[ResolvedFilterState]
+    time: TimeBindingState | None
+    unresolved: list[BindingIssueState]
+    ambiguous: list[BindingIssueState]
+
+
 class DataAgentState(TypedDict):
     """一次问数链路中的核心状态"""
 
@@ -73,6 +130,14 @@ class DataAgentState(TypedDict):
     metric_infos: list[MetricInfoState]  # 合并后的指标上下文
     date_info: DateInfoState  # 当前日期 星期和季度信息
     db_info: DBInfoState  # 数据库方言和版本信息
+
+    business_binding: BusinessBindingState
+    metric_bindings: list[MetricBindingState]
+    resolved_filters: list[ResolvedFilterState]
+    time_binding: TimeBindingState | None
+    validated_enum_values: list[str]
+    unresolved_bindings: list[BindingIssueState]
+    ambiguous_bindings: list[BindingIssueState]
 
     sql: str  # 生成或校正后的SQL
     final_answer: list[dict]  # SQL 执行结果，用于评测 trace 和最终返回

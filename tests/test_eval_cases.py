@@ -23,6 +23,7 @@ def test_evaluate_case_passes_when_sql_and_context_match():
         expected_sql_contains=["sum(", "order_amount", "华北"],
         expected_columns=["fact_order.order_amount", "dim_region.region_name"],
         expected_metrics=["GMV"],
+        expected_time_binding={"grain": "quarter", "year": 2025},
         must_call_tools=["mysql.dw.validate"],
     )
     state = {
@@ -37,6 +38,9 @@ def test_evaluate_case_passes_when_sql_and_context_match():
             {"name": "dim_region", "columns": [{"name": "region_name"}]},
         ],
         "metric_infos": [{"name": "GMV"}],
+        "metric_bindings": [{"canonical_metric": "GMV", "raw_mention": "销售额"}],
+        "resolved_filters": [{"canonical_value": "华北", "raw_value": "北方区域"}],
+        "time_binding": {"grain": "quarter", "year": 2025},
         "final_answer": [{"销售总额": 1}],
     }
 
@@ -46,7 +50,46 @@ def test_evaluate_case_passes_when_sql_and_context_match():
     assert result.failure_stage is None
     assert result.failures == []
     assert result.trace["generated_sql"].startswith("select")
+    assert result.trace["metric_bindings"] == [
+        {"canonical_metric": "GMV", "raw_mention": "销售额"}
+    ]
+    assert result.trace["resolved_filters"] == [
+        {"canonical_value": "华北", "raw_value": "北方区域"}
+    ]
+    assert result.trace["time_binding"] == {"grain": "quarter", "year": 2025}
     assert "mysql.dw.execute" in result.trace["tool_calls"]
+
+
+def test_evaluate_case_checks_expected_unresolved_binding():
+    case = EvalCase(
+        id="unknown_region",
+        query="火星区域的销售额是多少",
+        expected_blocked_by="semantic_guard",
+        expected_unresolved_binding={
+            "type": "enum_value",
+            "raw_text": "火星",
+            "candidate_column": "dim_region.region_name",
+        },
+    )
+    state = {
+        "keywords": ["火星", "区域", "销售额"],
+        "error": None,
+        "sql": "",
+        "safety_error": "业务绑定未解析",
+        "blocked_by": "semantic_guard",
+        "unresolved_bindings": [
+            {
+                "type": "enum_value",
+                "raw_text": "火星",
+                "candidate_column": "dim_region.region_name",
+                "reason": "value_not_found",
+            }
+        ],
+    }
+
+    result = evaluate_case(case, state)
+
+    assert result.passed is True
 
 
 def test_evaluate_case_reports_structured_failures_and_stage():

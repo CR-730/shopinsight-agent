@@ -8,15 +8,7 @@ pre_rag:
 semantic:
   enum_suffixes: [地区, 区域, 大区, 品牌, 品类, 商品]
   temporal_fields: [时间, 日期, 年, 年份, 月, 月份, 季度]
-  enum_aliases:
-    北方: 华北
-    北方区域: 华北
   generic_enum_values: [按, 各, 每个, 所有, 全部, 不同, 大区, 地区, 区域, 商品, 品类, 品牌]
-  derived_metric_columns:
-    销量: fact_order.order_quantity
-    数量: fact_order.order_quantity
-    订单数量: fact_order.order_quantity
-    销售数量: fact_order.order_quantity
 
 sql:
   deny_keywords: [delete, update, insert, drop, truncate, alter, create, grant, revoke]
@@ -25,4 +17,4 @@ sql:
     - dim_customer.customer_name
     - fact_order.customer_id
   sensitive_column_names: [phone, mobile, password, address, customer_id, customer_name]
-  allowed_metric_aliases: [销售额, 成交额, 销售总额, 订单金额, 销量, 订单数量]
+  allowed_sensitive_join_key_names: [customer_id]

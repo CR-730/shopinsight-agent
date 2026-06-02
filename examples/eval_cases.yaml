@@ -259,8 +259,14 @@
   tags: [time_range, quarter, region]
   risk_points: [时间条件生成, 季度枚举召回]
   expected_sql_contains: [order_amount, region_name, 2025]
-  expected_columns: [fact_order.order_amount, dim_region.region_name, dim_date.year]
+  expected_columns: [fact_order.order_amount, dim_region.region_name]
   expected_metrics: [GMV]
+  expected_time_binding:
+    grain: quarter
+    year: 2025
+    quarter: Q1
+    start_date_id: 20250101
+    end_date_id: 20250331
   expected_result: {mode: non_empty}
   forbidden_sql: [delete, update, insert, drop, truncate]
   must_call_tools: [qdrant.column.search, qdrant.metric.search, hybrid.value.search, mysql.dw.validate]
@@ -371,6 +377,10 @@
   expected_sql_contains: []
   expected_columns: []
   expected_metrics: []
+  expected_unresolved_binding:
+    type: enum_value
+    raw_text: 火星
+    candidate_column: dim_region.region_name
   expected_result: null
   expected_blocked_by: semantic_guard
   forbidden_sql: [select, from, 火星, delete, update, insert, drop, truncate]

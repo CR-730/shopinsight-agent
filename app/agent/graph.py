@@ -16,6 +16,7 @@ from app.agent.context import DataAgentContext
 from app.agent.cost import CostRates, CostTracker
 from app.agent.node_observer import traced_node
 from app.agent.nodes.add_extra_context import add_extra_context
+from app.agent.nodes.business_binding import business_binding
 from app.agent.nodes.correct_sql import correct_sql
 from app.agent.nodes.extract_keywords import extract_keywords
 from app.agent.nodes.fail_sql_correction import fail_sql_correction
@@ -62,6 +63,7 @@ graph_builder.add_node(
     "merge_retrieved_info", traced_node("merge_retrieved_info", merge_retrieved_info)
 )
 graph_builder.add_node("filter_metric", traced_node("filter_metric", filter_metric))
+graph_builder.add_node("business_binding", traced_node("business_binding", business_binding))
 graph_builder.add_node("filter_table", traced_node("filter_table", filter_table))
 graph_builder.add_node("add_extra_context", traced_node("add_extra_context", add_extra_context))
 graph_builder.add_node("semantic_guard", traced_node("semantic_guard", semantic_guard))
@@ -98,8 +100,9 @@ graph_builder.add_edge("recall_value", "merge_retrieved_info")
 graph_builder.add_edge("recall_metric", "merge_retrieved_info")
 
 # 合并后的候选信息继续拆成表过滤和指标过滤两条线
-graph_builder.add_edge("merge_retrieved_info", "filter_table")
-graph_builder.add_edge("merge_retrieved_info", "filter_metric")
+graph_builder.add_edge("merge_retrieved_info", "business_binding")
+graph_builder.add_edge("business_binding", "filter_table")
+graph_builder.add_edge("business_binding", "filter_metric")
 
 # 表和指标都过滤完成后，统一补充生成 SQL 所需的上下文
 graph_builder.add_edge("filter_table", "add_extra_context")

@@ -1,14 +1,17 @@
 import asyncio
 
-from app.agent.nodes.pre_rag_guard import validate_query_by_rules
+from app.agent.nodes import pre_rag_guard as pre_rag_guard_module
+from app.agent.nodes.pre_rag_guard import (
+    _should_block_classifier_result,
+    classify_query_intent,
+    validate_query_by_rules,
+)
 from app.agent.nodes.pre_sql_execution_validation import (
     normalize_sql_for_execution,
     validate_sql_before_execution,
+    validate_sql_structure_semantics,
 )
-from app.agent.nodes.semantic_guard import (
-    _merge_rule_extracted_intent,
-    validate_business_semantics_from_extracted_intent,
-)
+from app.agent.nodes.semantic_guard import validate_business_binding_state
 
 
 def test_pre_rag_guard_blocks_prompt_injection_before_retrieval():
@@ -18,116 +21,59 @@ def test_pre_rag_guard_blocks_prompt_injection_before_retrieval():
     assert "prompt_injection" in error
 
 
-def test_semantic_guard_blocks_unknown_metric_after_rag():
-    error = asyncio.run(
-        validate_business_semantics_from_extracted_intent(
-            state={"metric_infos": [], "retrieved_value_infos": []},
-            extracted_intent={
-                "metrics": ["品牌心智指数"],
-                "enum_values": [],
-            },
+def test_pre_rag_guard_blocks_when_classifier_fails():
+    assert (
+        _should_block_classifier_result(
+            {
+                "attack_type": "classifier_error",
+                "risk_level": "high",
+                "should_block": True,
+                "reason": "classifier_failed",
+            }
         )
+        is True
     )
 
-    assert error == "用户请求的指标未在元数据中确认：品牌心智指数"
+
+def test_pre_rag_guard_classifier_failure_returns_block_decision(monkeypatch):
+    async def fail_llm(*args, **kwargs):
+        raise TimeoutError("classifier timeout")
+
+    class Runtime:
+        context = {"cost_tracker": None}
+
+    monkeypatch.setattr(pre_rag_guard_module, "ainvoke_llm_with_usage", fail_llm)
+
+    result = asyncio.run(classify_query_intent("统计销售额", Runtime()))
+
+    assert result["should_block"] is True
+    assert result["attack_type"] == "classifier_error"
 
 
-def test_semantic_guard_allows_metric_when_filtered_rag_candidate_is_bound():
-    error = asyncio.run(
-        validate_business_semantics_from_extracted_intent(
-            state={
-                "metric_infos": [
-                    {
-                        "name": "GMV",
-                        "alias": ["成交总额", "订单总额"],
-                        "relevant_columns": ["fact_order.order_amount"],
-                    }
-                ],
-                "retrieved_value_infos": [],
-            },
-            extracted_intent={
-                "metrics": ["销售总额"],
-                "enum_values": [],
-            },
-        )
+def test_semantic_guard_blocks_unresolved_binding():
+    error = validate_business_binding_state(
+        {
+            "unresolved_bindings": [
+                {
+                    "type": "metric",
+                    "raw_text": "品牌心智指数",
+                    "reason": "metric_not_bound",
+                }
+            ]
+        }
     )
 
-    assert error is None
+    assert error == "业务绑定未解析：metric=品牌心智指数，原因：metric_not_bound"
 
 
-def test_semantic_guard_blocks_unknown_region_after_rag():
-    error = asyncio.run(
-        validate_business_semantics_from_extracted_intent(
-            state={"metric_infos": [{"name": "GMV", "alias": ["销售额"]}], "retrieved_value_infos": []},
-            extracted_intent={
-                "metrics": ["销售额"],
-                "enum_values": [{"field": "地区", "value": "火星"}],
-            },
-        )
-    )
-
-    assert error == "用户请求的枚举值未在召回结果中确认：火星"
-
-
-def test_semantic_guard_skips_time_expression_enum_validation():
-    error = asyncio.run(
-        validate_business_semantics_from_extracted_intent(
-            state={"metric_infos": [{"name": "GMV", "alias": ["销售额"]}], "retrieved_value_infos": []},
-            extracted_intent={
-                "metrics": ["GMV"],
-                "enum_values": [{"field": "时间", "value": "2025 年第一季度"}],
-            },
-        )
-    )
-
-    assert error is None
-
-
-def test_semantic_guard_allows_metric_synonym_with_prefix():
-    error = asyncio.run(
-        validate_business_semantics_from_extracted_intent(
-            state={"metric_infos": [{"name": "AOV", "alias": ["客单价"]}], "retrieved_value_infos": []},
-            extracted_intent={
-                "metrics": ["统计客单价"],
-                "enum_values": [],
-            },
-        )
-    )
-
-    assert error is None
-
-
-def test_semantic_guard_rule_extracts_metric_after_possessive_particle():
-    intent = _merge_rule_extracted_intent("火星区域的销售额是多少", {})
-
-    assert intent["metrics"] == ["销售额"]
-    assert intent["enum_values"] == [{"field": "地区", "value": "火星"}]
-
-
-def test_semantic_guard_does_not_treat_group_dimension_as_enum_value():
-    intent = _merge_rule_extracted_intent("2025 年第一季度各大区 GMV", {})
-
-    assert intent["metrics"] == []
-    assert intent["enum_values"] == []
-
-
-def test_semantic_guard_allows_enum_value_when_it_is_a_dimension_name():
-    class Column:
-        role = "dimension"
-        name = "member_level"
-        description = "客户会员等级"
-        alias = ["会员等级", "用户等级"]
-        table_id = "dim_customer"
-
-    error = asyncio.run(
-        validate_business_semantics_from_extracted_intent(
-            state={"metric_infos": [{"name": "AOV", "relevant_columns": ["fact_order.order_amount"]}]},
-            extracted_intent={
-                "metrics": ["客单价"],
-                "enum_values": [{"field": "会员等级", "value": "会员等级"}],
-            },
-            columns=[Column()],
-        )
+def test_semantic_guard_passes_when_binding_is_complete():
+    error = validate_business_binding_state(
+        {
+            "metric_bindings": [{"canonical_metric": "GMV"}],
+            "resolved_filters": [{"canonical_value": "华北"}],
+            "unresolved_bindings": [],
+            "ambiguous_bindings": [],
+        }
     )
 
     assert error is None
@@ -142,6 +88,33 @@ def test_pre_sql_execution_validation_blocks_sensitive_detail_sql():
     assert "敏感字段" in error
 
 
+def test_pre_sql_execution_validation_blocks_sensitive_column_in_where():
+    sql = "SELECT COUNT(*) AS cnt FROM fact_order WHERE customer_id = '123'"
+
+    error = validate_sql_before_execution({"query": "统计订单数"}, sql)
+
+    assert error is not None
+    assert "敏感字段" in error
+
+
+def test_pre_sql_execution_validation_blocks_sensitive_column_in_cte():
+    sql = "WITH x AS (SELECT customer_id AS cid FROM fact_order) SELECT cid FROM x"
+
+    error = validate_sql_before_execution({"query": "统计用户"}, sql)
+
+    assert error is not None
+    assert "敏感字段" in error
+
+
+def test_pre_sql_execution_validation_blocks_sensitive_column_in_subquery():
+    sql = "SELECT cid FROM (SELECT customer_id AS cid FROM fact_order) t"
+
+    error = validate_sql_before_execution({"query": "统计用户"}, sql)
+
+    assert error is not None
+    assert "敏感字段" in error
+
+
 def test_pre_sql_execution_validation_allows_sensitive_join_key_not_projected():
     sql = """
     SELECT dc.member_level AS 会员等级, AVG(fo.order_amount) AS 客单价
@@ -151,6 +124,93 @@ def test_pre_sql_execution_validation_allows_sensitive_join_key_not_projected():
     """
 
     error = validate_sql_before_execution({"query": "按会员等级统计客单价"}, sql)
+
+    assert error is None
+
+
+def test_pre_sql_execution_validation_blocks_sensitive_non_key_join_condition():
+    sql = """
+    SELECT COUNT(*) AS cnt
+    FROM dim_customer dc
+    JOIN dim_customer dx ON dc.phone = dx.phone
+    """
+
+    error = validate_sql_before_execution({"query": "统计用户数量"}, sql)
+
+    assert error is not None
+    assert "敏感字段" in error
+
+
+def test_pre_sql_execution_validation_flags_invalid_join_relationship_as_repairable():
+    state = {
+        "table_infos": [
+            {
+                "name": "fact_order",
+                "role": "fact",
+                "columns": [
+                    {"name": "region_id", "role": "foreign_key"},
+                    {"name": "product_id", "role": "foreign_key"},
+                    {"name": "order_amount", "role": "measure"},
+                ],
+            },
+            {
+                "name": "dim_region",
+                "role": "dim",
+                "columns": [
+                    {"name": "region_id", "role": "primary_key"},
+                    {"name": "region_name", "role": "dimension"},
+                ],
+            },
+            {
+                "name": "dim_product",
+                "role": "dim",
+                "columns": [
+                    {"name": "product_id", "role": "primary_key"},
+                    {"name": "category", "role": "dimension"},
+                ],
+            },
+        ]
+    }
+    sql = """
+    SELECT dp.category AS category, SUM(fo.order_amount) AS amount
+    FROM fact_order fo
+    JOIN dim_region dr ON fo.region_id = dr.region_name
+    JOIN dim_product dp ON fo.product_id = dp.product_id
+    WHERE dr.region_name = '华北'
+    GROUP BY dp.category
+    """
+
+    error = validate_sql_structure_semantics(state, sql)
+
+    assert error == (
+        "JOIN 条件不符合元数据关系：fact_order.region_id = dim_region.region_name。"
+        "候选正确关系：fact_order.region_id = dim_region.region_id。"
+    )
+
+
+def test_pre_sql_execution_validation_allows_valid_join_relationship():
+    state = {
+        "table_infos": [
+            {
+                "name": "fact_order",
+                "role": "fact",
+                "columns": [{"name": "region_id", "role": "foreign_key"}],
+            },
+            {
+                "name": "dim_region",
+                "role": "dim",
+                "columns": [{"name": "region_id", "role": "primary_key"}],
+            },
+        ]
+    }
+    sql = """
+    SELECT dr.region_name AS region_name, SUM(fo.order_amount) AS amount
+    FROM fact_order fo
+    JOIN dim_region dr ON fo.region_id = dr.region_id
+    GROUP BY dr.region_name
+    """
+
+    error = validate_sql_structure_semantics(state, sql)
 
     assert error is None
 
@@ -171,15 +231,23 @@ def test_pre_sql_execution_validation_blocks_projection_star_by_ast():
     assert error == "禁止 SELECT *"
 
 
-def test_pre_sql_execution_validation_blocks_fabricated_metric_alias():
-    sql = "SELECT COUNT(*) AS 品牌心智指数 FROM fact_order"
+def test_pre_sql_execution_validation_allows_semantically_validated_literal():
+    sql = "SELECT SUM(order_amount) AS GMV FROM fact_order WHERE region_name = '华北'"
 
     error = validate_sql_before_execution(
-        {"query": "品牌心智指数是多少", "metric_infos": []},
+        {"query": "华北 GMV", "validated_enum_values": ["华北"]},
         sql,
     )
 
-    assert error == "SQL 编造了未注册指标别名：品牌心智指数"
+    assert error is None
+
+
+def test_pre_sql_execution_validation_allows_date_literals():
+    sql = "SELECT SUM(order_amount) AS GMV FROM fact_order WHERE dt = '2025-01-01'"
+
+    error = validate_sql_before_execution({"query": "2025-01-01 GMV"}, sql)
+
+    assert error is None
 
 
 def test_pre_sql_execution_validation_normalizes_fullwidth_comma():
