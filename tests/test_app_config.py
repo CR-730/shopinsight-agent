@@ -16,12 +16,11 @@ def reload_app_config(monkeypatch):
         "LLM_FAST_MODEL": "Pro/zai-org/GLM-5.1-Air",
         "LLM_TIMEOUT_SECONDS": "60",
         "LLM_STRUCTURED_ENABLE_THINKING": "false",
-        "LLM_SQL_ENABLE_THINKING": "true",
+        "LLM_GENERATE_SQL_ENABLE_THINKING": "false",
+        "LLM_CORRECT_SQL_ENABLE_THINKING": "true",
         "LLM_INPUT_PER_1M_TOKENS": "0.8",
         "LLM_OUTPUT_PER_1M_TOKENS": "4.8",
-        "EMBEDDING_BASE_URL": "http://10.0.24.102:3000/v1",
-        "EMBEDDING_API_KEY": "embedding-key",
-        "EMBEDDING_MODEL": "Qwen3-Embedding-8B",
+        "EMBEDDING_MODEL": "text-embedding-v2",
     }
     for key, value in env_values.items():
         monkeypatch.setenv(key, value)
@@ -44,16 +43,32 @@ def test_llm_config_is_loaded_from_environment(monkeypatch):
     assert llm_config.base_url == "https://llm.example/v1"
     assert llm_config.timeout_seconds == 60
     assert llm_config.structured_enable_thinking is False
-    assert llm_config.sql_enable_thinking is True
+    assert llm_config.generate_sql_enable_thinking is False
+    assert llm_config.correct_sql_enable_thinking is True
     assert llm_config.input_per_1m_tokens == 0.8
     assert llm_config.output_per_1m_tokens == 4.8
+    assert llm_config.max_retries == 2
+    assert llm_config.retry_backoff_seconds == 0.2
+    assert llm_config.concurrency_limit == 4
+    assert llm_config.quota_circuit_breaker_seconds == 300
+    assert llm_config.rate_limit_breaker_threshold == 3
+    assert llm_config.error_window_seconds == 60
+    assert llm_config.error_window_min_calls == 20
+    assert llm_config.error_rate_threshold == 0.5
+    assert llm_config.max_calls_per_request == 40
+    assert llm_config.fast_max_retries == 2
+    assert llm_config.fast_concurrency_limit == 4
+    assert llm_config.fast_quota_circuit_breaker_seconds == 60
+    assert llm_config.sql_max_retries == 1
+    assert llm_config.sql_concurrency_limit == 1
+    assert llm_config.sql_quota_circuit_breaker_seconds == 300
 
 
 def test_embedding_config_is_loaded_from_environment(monkeypatch):
     app_config_module = reload_app_config(monkeypatch)
 
-    assert app_config_module.app_config.qdrant.embedding_size == 4096
+    assert app_config_module.app_config.qdrant.embedding_size == 1536
     embedding_config = app_config_module.app_config.embedding
-    assert embedding_config.base_url == "http://10.0.24.102:3000/v1"
-    assert embedding_config.api_key == "embedding-key"
-    assert embedding_config.model == "Qwen3-Embedding-8B"
+    assert embedding_config.base_url == "https://llm.example/v1"
+    assert embedding_config.api_key == "llm-key"
+    assert embedding_config.model == "text-embedding-v2"

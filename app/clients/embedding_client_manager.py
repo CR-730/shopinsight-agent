@@ -24,11 +24,11 @@ class EmbeddingClientManager:
         """显式初始化客户端，避免模块导入时立即建立外部连接。"""
         self.client = CachedEmbeddingClient(
             OpenAIEmbeddings(
-            model=self.config.model,
-            base_url=self.config.base_url,
-            api_key=self.config.api_key,
-            tiktoken_enabled=False,
-            check_embedding_ctx_length=False,
+                model=self.config.model,
+                base_url=self.config.base_url,
+                api_key=self.config.api_key,
+                tiktoken_enabled=False,
+                check_embedding_ctx_length=False,
             )
         )
 

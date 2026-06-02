@@ -58,6 +58,10 @@ class CostTracker:
         cached_tokens: int = 0,
         cache_hit: bool = False,
         retry_count: int = 0,
+        breaker_state: str = "closed",
+        retry_after_ms: float | None = None,
+        throttle_wait_ms: float | None = None,
+        final_error_type: str | None = None,
         error_type: str | None = None,
     ):
         total_tokens = input_tokens + output_tokens
@@ -82,6 +86,10 @@ class CostTracker:
                 "latency_ms": latency_ms,
                 "cache_hit": cache_hit,
                 "retry_count": retry_count,
+                "breaker_state": breaker_state,
+                "retry_after_ms": retry_after_ms,
+                "throttle_wait_ms": throttle_wait_ms,
+                "final_error_type": final_error_type or error_type,
                 "error_type": error_type,
             }
         )

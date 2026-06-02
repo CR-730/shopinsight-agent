@@ -90,9 +90,25 @@ class LLMConfig:
     base_url: str
     timeout_seconds: int
     structured_enable_thinking: bool
-    sql_enable_thinking: bool
+    generate_sql_enable_thinking: bool
+    correct_sql_enable_thinking: bool
     input_per_1m_tokens: float
     output_per_1m_tokens: float
+    max_retries: int
+    retry_backoff_seconds: float
+    concurrency_limit: int
+    quota_circuit_breaker_seconds: int
+    rate_limit_breaker_threshold: int
+    error_window_seconds: int
+    error_window_min_calls: int
+    error_rate_threshold: float
+    max_calls_per_request: int
+    fast_max_retries: int
+    fast_concurrency_limit: int
+    fast_quota_circuit_breaker_seconds: int
+    sql_max_retries: int
+    sql_concurrency_limit: int
+    sql_quota_circuit_breaker_seconds: int
 
 
 @dataclass
@@ -181,6 +197,20 @@ def _get_bool_env(name: str) -> bool:
     raise RuntimeError(f"Invalid boolean environment variable: {name}={value}")
 
 
+def _get_optional_int_env(name: str, default: int) -> int:
+    value = os.getenv(name)
+    if value is None or value == "":
+        return default
+    return int(value)
+
+
+def _get_optional_float_env(name: str, default: float) -> float:
+    value = os.getenv(name)
+    if value is None or value == "":
+        return default
+    return float(value)
+
+
 project_root = Path(__file__).parents[2]
 config_file = project_root / "conf" / "app_config.yaml"
 
@@ -203,8 +233,8 @@ app_config = AppConfig(
     qdrant=file_config.qdrant,
     es=file_config.es,
     embedding=EmbeddingConfig(
-        base_url=_get_env("EMBEDDING_BASE_URL"),
-        api_key=_get_env("EMBEDDING_API_KEY"),
+        base_url=_get_env("LLM_BASE_URL"),
+        api_key=_get_env("LLM_API_KEY"),
         model=_get_env("EMBEDDING_MODEL"),
     ),
     llm=LLMConfig(
@@ -218,9 +248,35 @@ app_config = AppConfig(
         base_url=_get_env("LLM_BASE_URL"),
         timeout_seconds=int(_get_env("LLM_TIMEOUT_SECONDS")),
         structured_enable_thinking=_get_bool_env("LLM_STRUCTURED_ENABLE_THINKING"),
-        sql_enable_thinking=_get_bool_env("LLM_SQL_ENABLE_THINKING"),
+        generate_sql_enable_thinking=_get_bool_env(
+            "LLM_GENERATE_SQL_ENABLE_THINKING"
+        ),
+        correct_sql_enable_thinking=_get_bool_env("LLM_CORRECT_SQL_ENABLE_THINKING"),
         input_per_1m_tokens=float(_get_env("LLM_INPUT_PER_1M_TOKENS")),
         output_per_1m_tokens=float(_get_env("LLM_OUTPUT_PER_1M_TOKENS")),
+        max_retries=_get_optional_int_env("LLM_MAX_RETRIES", 2),
+        retry_backoff_seconds=_get_optional_float_env("LLM_RETRY_BACKOFF_SECONDS", 0.2),
+        concurrency_limit=_get_optional_int_env("LLM_CONCURRENCY_LIMIT", 4),
+        quota_circuit_breaker_seconds=_get_optional_int_env(
+            "LLM_QUOTA_CIRCUIT_BREAKER_SECONDS", 300
+        ),
+        rate_limit_breaker_threshold=_get_optional_int_env(
+            "LLM_RATE_LIMIT_BREAKER_THRESHOLD", 3
+        ),
+        error_window_seconds=_get_optional_int_env("LLM_ERROR_WINDOW_SECONDS", 60),
+        error_window_min_calls=_get_optional_int_env("LLM_ERROR_WINDOW_MIN_CALLS", 20),
+        error_rate_threshold=_get_optional_float_env("LLM_ERROR_RATE_THRESHOLD", 0.5),
+        max_calls_per_request=_get_optional_int_env("LLM_MAX_CALLS_PER_REQUEST", 40),
+        fast_max_retries=_get_optional_int_env("LLM_FAST_MAX_RETRIES", 2),
+        fast_concurrency_limit=_get_optional_int_env("LLM_FAST_CONCURRENCY_LIMIT", 4),
+        fast_quota_circuit_breaker_seconds=_get_optional_int_env(
+            "LLM_FAST_QUOTA_CIRCUIT_BREAKER_SECONDS", 60
+        ),
+        sql_max_retries=_get_optional_int_env("LLM_SQL_MAX_RETRIES", 1),
+        sql_concurrency_limit=_get_optional_int_env("LLM_SQL_CONCURRENCY_LIMIT", 1),
+        sql_quota_circuit_breaker_seconds=_get_optional_int_env(
+            "LLM_SQL_QUOTA_CIRCUIT_BREAKER_SECONDS", 300
+        ),
     ),
     agent=file_config.agent,
     metadata_build=file_config.metadata_build,

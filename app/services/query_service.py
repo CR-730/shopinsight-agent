@@ -13,6 +13,12 @@ from langchain_core.embeddings import Embeddings
 from app.agent.context import DataAgentContext
 from app.agent.cost import CostRates, CostTracker
 from app.agent.graph import graph
+from app.agent.llm_usage import (
+    reset_llm_cache_context_namespace,
+    reset_llm_request_call_budget,
+    set_llm_cache_context_namespace,
+    set_llm_request_call_budget,
+)
 from app.agent.state import DataAgentState
 from app.conf.app_config import app_config
 from app.repositories.es.value_es_repository import ValueESRepository
@@ -65,6 +71,12 @@ class QueryService:
                 currency=app_config.cost.currency,
             )
         )
+        metadata_build_version = (
+            await self.meta_mysql_repository.get_active_build_version()
+        )
+        metadata_cache_version = (
+            await self.meta_mysql_repository.get_metadata_cache_version()
+        )
         context = DataAgentContext(
             column_qdrant_repository=self.column_qdrant_repository,
             embedding_client=self.embedding_client,
@@ -74,6 +86,14 @@ class QueryService:
             meta_mysql_repository=self.meta_mysql_repository,
             dw_mysql_repository=self.dw_mysql_repository,
             cost_tracker=cost_tracker,
+            metadata_build_version=metadata_build_version,
+            metadata_cache_version=metadata_cache_version,
+        )
+        cache_namespace_token = set_llm_cache_context_namespace(
+            f"metadata:{metadata_cache_version}"
+        )
+        call_budget_token = set_llm_request_call_budget(
+            app_config.llm.max_calls_per_request
         )
         try:
             # stream_mode="custom" 对应节点内部 writer(...) 写出的进度消息
@@ -91,3 +111,6 @@ class QueryService:
             yield f"data: {json.dumps(error, ensure_ascii=False, default=str)}\n\n"
             usage = {"type": "usage", "data": cost_tracker.summary()}
             yield f"data: {json.dumps(usage, ensure_ascii=False, default=str)}\n\n"
+        finally:
+            reset_llm_cache_context_namespace(cache_namespace_token)
+            reset_llm_request_call_budget(call_budget_token)

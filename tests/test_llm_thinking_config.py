@@ -1,4 +1,5 @@
 from app.agent.llm import build_llm_kwargs
+from app.conf.app_config import app_config
 
 
 def test_structured_llm_disables_thinking():
@@ -17,3 +18,8 @@ def test_build_llm_kwargs_accepts_model_override():
     kwargs = build_llm_kwargs(enable_thinking=False, model="fast-model")
 
     assert kwargs["model"] == "fast-model"
+
+
+def test_generate_and_correct_sql_thinking_are_configured_separately():
+    assert app_config.llm.generate_sql_enable_thinking is False
+    assert app_config.llm.correct_sql_enable_thinking is True

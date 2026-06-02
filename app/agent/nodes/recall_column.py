@@ -79,7 +79,10 @@ async def recall_column(state: DataAgentState, runtime: Runtime[DataAgentContext
                 cache_hit=bool(getattr(embedding_client, "last_cache_hit", False)),
             )
             current_column_infos: list[ColumnInfo] = await ainvoke_with_timeout(
-                column_qdrant_repository.search(embedding),
+                column_qdrant_repository.search(
+                    embedding,
+                    meta_build_version=runtime.context.get("metadata_build_version"),
+                ),
                 app_config.agent.retrieval_timeout_seconds,
             )
             latency_ms = round((time.perf_counter() - keyword_started_at) * 1000, 2)

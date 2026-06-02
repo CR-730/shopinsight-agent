@@ -8,7 +8,7 @@ Context 用来保存一次图执行过程中不参与状态合并的外部依赖
 这样节点可以通过 runtime.context 复用外部工具，而不需要把连接类对象塞进 State
 """
 
-from typing import TypedDict
+from typing import NotRequired, TypedDict
 
 from langchain_core.embeddings import Embeddings
 
@@ -40,3 +40,5 @@ class DataAgentContext(TypedDict):
     dw_mysql_repository: DWMySQLRepository
     # 单次问数的 token 和成本追踪器
     cost_tracker: CostTracker
+    metadata_build_version: NotRequired[str | None]
+    metadata_cache_version: NotRequired[str]

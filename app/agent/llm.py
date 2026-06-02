@@ -27,8 +27,12 @@ llm = init_chat_model(
 )
 
 # SQL 生成和 SQL 错误修正可以开启 thinking，换取更强的规划/修正能力。
-sql_llm = init_chat_model(
-    **build_llm_kwargs(app_config.llm.sql_enable_thinking)
+generate_sql_llm = init_chat_model(
+    **build_llm_kwargs(app_config.llm.generate_sql_enable_thinking)
+)
+
+correct_sql_llm = init_chat_model(
+    **build_llm_kwargs(app_config.llm.correct_sql_enable_thinking)
 )
 
 

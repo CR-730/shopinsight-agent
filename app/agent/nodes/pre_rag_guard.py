@@ -33,6 +33,7 @@ class PreRagGuardDecision(BaseModel):
         "system_leak",
         "out_of_scope",
         "incomplete",
+        "classifier_error",
     ] = Field(description="The primary risk category.")
     risk_level: Literal["low", "medium", "high"] = Field(
         description="Risk severity of the detected intent."
@@ -99,7 +100,13 @@ async def classify_query_intent(
         return result.model_dump()
     except Exception as exc:
         logger.warning(f"RAG 前安全分类失败，降级为规则结果: {exc}")
-        return {"should_block": False, "risk_level": "low", "reason": "classifier_failed"}
+        return {
+            "is_prompt_injection": False,
+            "attack_type": "classifier_error",
+            "risk_level": "high",
+            "should_block": True,
+            "reason": "RAG 前安全分类器失败，已按保守策略阻断",
+        }
 
 
 def _should_block_classifier_result(result: dict[str, Any]) -> bool:

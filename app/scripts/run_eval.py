@@ -14,6 +14,12 @@ from typing import Any
 from app.agent.context import DataAgentContext
 from app.agent.cost import CostRates, CostTracker
 from app.agent.graph import graph
+from app.agent.llm_usage import (
+    reset_llm_cache_context_namespace,
+    reset_llm_request_call_budget,
+    set_llm_cache_context_namespace,
+    set_llm_request_call_budget,
+)
 from app.agent.state import DataAgentState
 from app.clients.embedding_client_manager import embedding_client_manager
 from app.clients.es_client_manager import es_client_manager
@@ -130,6 +136,12 @@ async def run_eval(cases_path: Path, output_path: Path | None = None) -> int:
 async def _run_case(case: EvalCase, repositories: dict[str, Any]) -> dict[str, Any]:
     print(f"Running eval case: {case.id} - {case.query}")
     cost_tracker = _new_cost_tracker()
+    metadata_build_version = await repositories[
+        "meta_mysql_repository"
+    ].get_active_build_version()
+    metadata_cache_version = await repositories[
+        "meta_mysql_repository"
+    ].get_metadata_cache_version()
     context = DataAgentContext(
         column_qdrant_repository=repositories["column_qdrant_repository"],
         embedding_client=embedding_client_manager.client,
@@ -139,6 +151,8 @@ async def _run_case(case: EvalCase, repositories: dict[str, Any]) -> dict[str, A
         meta_mysql_repository=repositories["meta_mysql_repository"],
         dw_mysql_repository=repositories["dw_mysql_repository"],
         cost_tracker=cost_tracker,
+        metadata_build_version=metadata_build_version,
+        metadata_cache_version=metadata_cache_version,
     )
     state = DataAgentState(
         query=case.query,
@@ -146,6 +160,10 @@ async def _run_case(case: EvalCase, repositories: dict[str, Any]) -> dict[str, A
         max_correction_attempts=app_config.agent.max_sql_correction_attempts,
     )
     started = time.perf_counter()
+    cache_namespace_token = set_llm_cache_context_namespace(
+        f"metadata:{metadata_cache_version}"
+    )
+    call_budget_token = set_llm_request_call_budget(app_config.llm.max_calls_per_request)
     try:
         final_state = await asyncio.wait_for(
             graph.ainvoke(input=state, context=context),
@@ -177,6 +195,9 @@ async def _run_case(case: EvalCase, repositories: dict[str, Any]) -> dict[str, A
                 "metric_infos": [],
             },
         )
+    finally:
+        reset_llm_cache_context_namespace(cache_namespace_token)
+        reset_llm_request_call_budget(call_budget_token)
 
     payload = result.to_dict()
     payload["case"] = case.to_dict()

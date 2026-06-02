@@ -156,16 +156,14 @@ LLM_BASE_URL=https://api.siliconflow.cn/v1
 
 LLM_MODEL=Pro/zai-org/GLM-5.1
 
-EMBEDDING_BASE_URL=http://10.0.24.102:3000/v1
-EMBEDDING_API_KEY=your_embedding_api_key
-EMBEDDING_MODEL=Qwen3-Embedding-8B
+EMBEDDING_MODEL=text-embedding-v2
 ```
 
 默认配置通过 OpenAI-compatible 接口接入 LLM 和 Embedding 服务：
 
 ```text
 LLM_PROVIDER / LLM_API_KEY / LLM_BASE_URL / LLM_MODEL
-EMBEDDING_BASE_URL / EMBEDDING_API_KEY / EMBEDDING_MODEL
+EMBEDDING_MODEL
 ```
 
 如需使用其他兼容 OpenAI API 的模型平台，修改 `.env` 中的对应变量，不需要改 [conf/app_config.yaml](conf/app_config.yaml)。
@@ -175,7 +173,7 @@ EMBEDDING_BASE_URL / EMBEDDING_API_KEY / EMBEDDING_MODEL
 项目通过远程 OpenAI-compatible `/embeddings` 服务生成向量，不再本地部署 Embedding 模型。可按需检查服务是否可访问：
 
 ```bash
-curl "${EMBEDDING_BASE_URL}/models"
+curl "${LLM_BASE_URL}/models"
 ```
 
 如果该接口不支持 `/models`，也可以直接运行元数据知识库构建脚本验证向量调用。

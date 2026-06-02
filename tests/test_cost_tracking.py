@@ -86,6 +86,10 @@ def test_cost_tracker_records_llm_observability_fields():
         cached_tokens=5,
         cache_hit=True,
         retry_count=1,
+        breaker_state="open",
+        retry_after_ms=250,
+        throttle_wait_ms=10,
+        final_error_type="TimeoutError",
         error_type="TimeoutError",
     )
     call = tracker.summary()["calls"][0]
@@ -95,6 +99,10 @@ def test_cost_tracker_records_llm_observability_fields():
     assert call["cached_tokens"] == 5
     assert call["cache_hit"] is True
     assert call["retry_count"] == 1
+    assert call["breaker_state"] == "open"
+    assert call["retry_after_ms"] == 250
+    assert call["throttle_wait_ms"] == 10
+    assert call["final_error_type"] == "TimeoutError"
     assert call["error_type"] == "TimeoutError"
 
 

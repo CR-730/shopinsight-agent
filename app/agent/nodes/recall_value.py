@@ -76,12 +76,17 @@ async def recall_value(state: DataAgentState, runtime: Runtime[DataAgentContext]
                 vector_value_infos,
                 vector_latency_ms,
             ) = await asyncio.gather(
-                _search_values_by_es(value_es_repository, keyword),
+                _search_values_by_es(
+                    value_es_repository,
+                    keyword,
+                    runtime.context.get("metadata_build_version"),
+                ),
                 _search_values_by_vector(
                     value_qdrant_repository,
                     embedding_client,
                     keyword,
                     runtime.context["cost_tracker"],
+                    runtime.context.get("metadata_build_version"),
                 ),
             )
 
@@ -118,17 +123,23 @@ async def recall_value(state: DataAgentState, runtime: Runtime[DataAgentContext]
         raise
 
 
-async def _search_values_by_es(value_es_repository, keyword: str):
+async def _search_values_by_es(
+    value_es_repository, keyword: str, metadata_build_version: str | None
+):
     started_at = time.perf_counter()
     value_infos = await ainvoke_with_timeout(
-        value_es_repository.search(keyword),
+        value_es_repository.search(keyword, meta_build_version=metadata_build_version),
         app_config.agent.retrieval_timeout_seconds,
     )
     return value_infos, round((time.perf_counter() - started_at) * 1000, 2)
 
 
 async def _search_values_by_vector(
-    value_qdrant_repository, embedding_client, keyword: str, cost_tracker
+    value_qdrant_repository,
+    embedding_client,
+    keyword: str,
+    cost_tracker,
+    metadata_build_version: str | None,
 ):
     started_at = time.perf_counter()
     embedding = await ainvoke_with_timeout(
@@ -146,6 +157,7 @@ async def _search_values_by_vector(
         value_qdrant_repository.search(
             embedding,
             score_threshold=app_config.agent.value_vector_score_threshold,
+            meta_build_version=metadata_build_version,
         ),
         app_config.agent.retrieval_timeout_seconds,
     )
