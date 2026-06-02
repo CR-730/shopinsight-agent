@@ -62,6 +62,7 @@ def test_llm_config_is_loaded_from_environment(monkeypatch):
     assert llm_config.sql_max_retries == 1
     assert llm_config.sql_concurrency_limit == 1
     assert llm_config.sql_quota_circuit_breaker_seconds == 300
+    assert app_config_module.app_config.agent.sql_execution_timeout_seconds == 60
 
 
 def test_embedding_config_is_loaded_from_environment(monkeypatch):

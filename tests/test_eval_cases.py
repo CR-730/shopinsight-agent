@@ -124,6 +124,59 @@ def test_evaluate_case_reports_structured_failures_and_stage():
     assert any(failure["stage"] == "rag_recall" for failure in failures)
 
 
+def test_evaluate_case_does_not_add_missing_context_noise_for_empty_timeout_state():
+    case = EvalCase(
+        id="timeout_case",
+        query="2025 年第一季度各大区 GMV",
+        expected_sql_contains=["order_amount", "region_name"],
+        expected_columns=["fact_order.order_amount", "dim_region.region_name"],
+        expected_metrics=["GMV"],
+        must_call_tools=["qdrant.column.search", "mysql.dw.validate"],
+        expected_result={"mode": "non_empty"},
+    )
+    state = {
+        "keywords": [],
+        "exception_stage": "tool_execution",
+        "error": "case timeout while waiting for run_sql",
+        "sql": "",
+        "table_infos": [],
+        "metric_infos": [],
+    }
+
+    result = evaluate_case(case, state)
+
+    failures = [failure.to_dict() for failure in result.failures]
+    assert result.failure_stage == "tool_execution"
+    assert [failure["code"] for failure in failures] == ["tool_or_node_exception"]
+    assert failures[0]["stage"] == "tool_execution"
+
+
+def test_evaluate_case_keeps_tool_execution_timeout_stage_for_sql_state():
+    case = EvalCase(
+        id="run_sql_timeout",
+        query="统计 GMV",
+        expected_sql_contains=["order_amount"],
+        expected_columns=["fact_order.order_amount"],
+        expected_metrics=["GMV"],
+        expected_result={"mode": "non_empty"},
+    )
+    state = {
+        "keywords": ["GMV"],
+        "exception_stage": "tool_execution",
+        "error": "SQL 执行超时：60 秒",
+        "sql": "select sum(order_amount) from fact_order",
+        "table_infos": [{"name": "fact_order", "columns": [{"name": "order_amount"}]}],
+        "metric_infos": [{"name": "GMV"}],
+    }
+
+    result = evaluate_case(case, state)
+
+    failures = [failure.to_dict() for failure in result.failures]
+    assert result.failure_stage == "tool_execution"
+    assert any(failure["code"] == "tool_or_node_exception" for failure in failures)
+    assert not any(failure["code"] == "sql_validation_error" for failure in failures)
+
+
 def test_load_eval_cases_supports_extended_schema(tmp_path):
     cases_path = tmp_path / "cases.yaml"
     cases_path.write_text(

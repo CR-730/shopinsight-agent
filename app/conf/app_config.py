@@ -118,6 +118,7 @@ class AgentConfig:
     max_sql_correction_attempts: int = 2
     embedding_timeout_seconds: int = 30
     retrieval_timeout_seconds: int = 30
+    sql_execution_timeout_seconds: int = 60
     value_hybrid_es_weight: float = 1.2
     value_hybrid_vector_weight: float = 1.0
     value_vector_score_threshold: float = 0.65

@@ -164,6 +164,8 @@ def _evaluate_failures(case: EvalCase, trace: dict[str, Any]) -> list[EvalFailur
                 stage=trace["exception_stage"],
             )
         )
+        if _is_empty_exception_trace(trace):
+            return failures
 
     if (
         not trace["keywords"]
@@ -189,7 +191,7 @@ def _evaluate_failures(case: EvalCase, trace: dict[str, Any]) -> list[EvalFailur
                 )
             )
 
-    if trace["sql_error"] is not None:
+    if trace["sql_error"] is not None and not trace["exception_stage"]:
         failures.append(
             EvalFailure(
                 code="sql_validation_error",
@@ -319,6 +321,18 @@ def _evaluate_failures(case: EvalCase, trace: dict[str, Any]) -> list[EvalFailur
             )
 
     return failures
+
+
+def _is_empty_exception_trace(trace: dict[str, Any]) -> bool:
+    return (
+        not trace["keywords"]
+        and not trace["generated_sql"]
+        and not trace["filtered_columns"]
+        and not trace["filtered_metrics"]
+        and not trace["retrieved_columns"]
+        and not trace["retrieved_metrics"]
+        and not trace["retrieved_values"]
+    )
 
 
 def _has_expected_binding_issue(
