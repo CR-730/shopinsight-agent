@@ -93,7 +93,6 @@ class MetaMySQLRepository:
     async def get_active_build_version(self) -> str | None:
         """读取最近一次成功构建版本，供查询链路作为 RAG 版本边界。"""
 
-        await self._ensure_metadata_build_table()
         result = await self.session.execute(
             text("select version from metadata_build order by id desc limit 1")
         )
@@ -103,7 +102,6 @@ class MetaMySQLRepository:
         """把当前 Meta MySQL 内容折叠成缓存版本，避免直接改库后继续命中旧 LLM 缓存。"""
 
         active_build_version = await self.get_active_build_version()
-        await self._ensure_value_alias_table()
         table_rows: dict[str, list[dict[str, Any]]] = {}
         for table_name, order_by in _METADATA_VERSION_TABLES.items():
             result = await self.session.execute(
@@ -253,7 +251,6 @@ class MetaMySQLRepository:
         if self._value_aliases_cache is not None:
             return self._value_aliases_cache
 
-        await self._ensure_value_alias_table()
         result = await self.session.execute(text("select * from value_alias"))
         self._value_aliases_cache = [
             ValueAlias(
