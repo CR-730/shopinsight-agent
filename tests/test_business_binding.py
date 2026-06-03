@@ -250,7 +250,31 @@ def test_unknown_metric_blocking_is_based_on_candidate_not_keyword_guessing():
     ]
 
 
-def test_unknown_extra_metric_does_not_block_when_catalog_metric_is_bound():
+def test_mixed_known_and_unknown_metrics_keeps_unresolved_metric():
+    binding = asyncio.run(
+        validate_binding_candidates(
+            BindingCandidates(
+                metric_mentions=[
+                    MetricMention(raw_text="销售额", normalized_text="销售额"),
+                    MetricMention(raw_text="品牌心智指数", normalized_text="品牌心智指数"),
+                ]
+            ),
+            _context(metric_infos=[{"name": "GMV", "alias": ["销售额"]}]),
+        )
+    )
+
+    assert binding["metrics"][0]["canonical_metric"] == "GMV"
+    assert binding["unresolved"] == [
+        {
+            "type": "metric",
+            "raw_text": "品牌心智指数",
+            "candidate_column": "",
+            "reason": "metric_not_bound",
+        }
+    ]
+
+
+def test_measure_column_mentions_do_not_become_unknown_metrics_when_metric_is_bound():
     binding = asyncio.run(
         validate_binding_candidates(
             BindingCandidates(
@@ -259,12 +283,125 @@ def test_unknown_extra_metric_does_not_block_when_catalog_metric_is_bound():
                     MetricMention(raw_text="订单数量", normalized_text="订单数量"),
                 ]
             ),
-            _context(metric_infos=[{"name": "GMV", "alias": ["销售额"]}]),
+            _context(
+                metric_infos=[{"name": "GMV", "alias": ["销售额"]}],
+                table_infos=[
+                    {
+                        "name": "fact_order",
+                        "columns": [
+                            {
+                                "name": "order_quantity",
+                                "role": "measure",
+                                "alias": ["订单数量"],
+                            }
+                        ],
+                    }
+                ],
+            ),
         )
     )
 
     assert binding["metrics"][0]["canonical_metric"] == "GMV"
     assert binding["unresolved"] == []
+
+
+def test_extraction_failure_fails_closed_even_with_explicit_metric_fallback():
+    binding = asyncio.run(
+        validate_binding_candidates(
+            BindingCandidates(
+                metric_mentions=[MetricMention(raw_text="销售额", normalized_text="销售额")],
+                extraction_failed=True,
+            ),
+            _context(metric_infos=[{"name": "GMV", "alias": ["销售额"]}]),
+        )
+    )
+
+    assert binding["metrics"][0]["canonical_metric"] == "GMV"
+    assert binding["unresolved"] == [
+        {
+            "type": "candidate_extraction",
+            "raw_text": "",
+            "candidate_column": "",
+            "reason": "candidate_extraction_failed",
+        }
+    ]
+
+
+def test_filter_candidate_without_field_hint_is_unresolved_when_not_bound():
+    binding = asyncio.run(
+        validate_binding_candidates(
+            BindingCandidates(filter_mentions=[FilterMention(raw_text="火星", field_hint="")]),
+            _context(table_infos=_region_table()),
+        )
+    )
+
+    assert binding["unresolved"] == [
+        {
+            "type": "enum_value",
+            "raw_text": "火星",
+            "candidate_column": "",
+            "reason": "field_hint_missing",
+        }
+    ]
+
+
+def test_filter_candidate_with_unknown_field_hint_can_still_use_retrieved_value():
+    binding = asyncio.run(
+        validate_binding_candidates(
+            BindingCandidates(
+                filter_mentions=[
+                    FilterMention(raw_text="iPhone 15 Pro", field_hint="商品")
+                ]
+            ),
+            _context(
+                table_infos=_region_table(),
+                retrieved_value_infos=[
+                    ValueInfo(
+                        id="dim_product.product_name.iPhone 15 Pro",
+                        value="iPhone 15 Pro",
+                        column_id="dim_product.product_name",
+                    )
+                ],
+            ),
+        )
+    )
+
+    assert binding["filters"] == [
+        {
+            "raw_value": "iPhone 15 Pro",
+            "canonical_value": "iPhone 15 Pro",
+            "column": "dim_product.product_name",
+            "field_alias": "商品",
+            "matched_by": "retrieved_value",
+            "allowed_sql_literals": ["iPhone 15 Pro"],
+        }
+    ]
+    assert binding["unresolved"] == []
+
+
+def test_time_resolver_uses_source_query_when_time_mentions_are_missing():
+    binding = asyncio.run(
+        validate_binding_candidates(
+            BindingCandidates(
+                metric_mentions=[MetricMention(raw_text="GMV", normalized_text="GMV")],
+                source_query="2025 年第一季度 GMV",
+            ),
+            _context(metric_infos=[{"name": "GMV", "alias": []}]),
+        )
+    )
+
+    assert binding["time"] == {
+        "raw_text": "2025 年第一季度",
+        "grain": "quarter",
+        "year": 2025,
+        "quarter": "Q1",
+        "start_date": "2025-01-01",
+        "end_date": "2025-03-31",
+        "start_date_id": 20250101,
+        "end_date_id": 20250331,
+        "strategy": "date_range",
+        "required_columns": ["fact_order.date_id"],
+    }
 
 
 def test_fallback_candidates_only_use_explicit_metadata_and_rag_hits():

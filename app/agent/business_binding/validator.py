@@ -32,8 +32,14 @@ async def validate_binding_candidates(
         candidates, context.metric_infos, context.table_infos
     )
     filters, filter_issues = await resolve_filter_candidates(candidates, context)
-    time_binding = resolve_time_mentions([item.raw_text for item in candidates.time_mentions])
-    unresolved = [*(metric_issues if not metrics else []), *filter_issues]
+    time_binding = resolve_time_mentions(
+        [item.raw_text for item in candidates.time_mentions] + [candidates.source_query]
+    )
+    unresolved = [
+        *metric_issues,
+        *filter_issues,
+        *_extraction_issues(candidates),
+    ]
     return {
         "metrics": metrics,
         "filters": filters,
@@ -174,6 +180,19 @@ def validated_enum_values(filters: list[ResolvedFilterState]) -> list[str]:
     return [literal for item in filters for literal in item["allowed_sql_literals"]]
 
 
+def _extraction_issues(candidates: BindingCandidates) -> list[BindingIssueState]:
+    if not candidates.extraction_failed:
+        return []
+    return [
+        {
+            "type": "candidate_extraction",
+            "raw_text": "",
+            "candidate_column": "",
+            "reason": "candidate_extraction_failed",
+        }
+    ]
+
+
 def _metric_catalog(metric_infos: list[dict[str, Any]]):
     catalog = {}
     for metric_info in metric_infos:
@@ -246,8 +265,8 @@ def _candidate_columns(
     columns_by_hint: dict[str, list[str]],
     values_by_column: dict[str, set[str]],
 ) -> list[str]:
-    if field_hint:
-        return columns_by_hint.get(field_hint, [])
+    if field_hint and field_hint in columns_by_hint:
+        return columns_by_hint[field_hint]
     return list(values_by_column)
 
 
@@ -269,9 +288,21 @@ def _filter_issue(
     field_hint: str,
     columns_by_hint: dict[str, list[str]],
 ) -> BindingIssueState | None:
-    columns = columns_by_hint.get(field_hint, []) if field_hint else []
-    if not field_hint or not columns:
-        return None
+    if not field_hint:
+        return {
+            "type": "enum_value",
+            "raw_text": raw_value,
+            "candidate_column": "",
+            "reason": "field_hint_missing",
+        }
+    columns = columns_by_hint.get(field_hint, [])
+    if not columns:
+        return {
+            "type": "enum_value",
+            "raw_text": raw_value,
+            "candidate_column": "",
+            "reason": "field_hint_not_found",
+        }
     return {
         "type": "enum_value",
         "raw_text": raw_value,

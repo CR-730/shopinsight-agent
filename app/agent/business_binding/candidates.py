@@ -46,6 +46,8 @@ class GroupByMention(BaseModel):
 class BindingCandidates(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
+    source_query: str = Field(default="")
+    extraction_failed: bool = Field(default=False)
     metric_mentions: list[MetricMention] = Field(default_factory=list)
     filter_mentions: list[FilterMention] = Field(default_factory=list)
     time_mentions: list[TimeMention] = Field(default_factory=list)
@@ -76,6 +78,7 @@ async def extract_binding_candidates(
             runtime.context["cost_tracker"],
             app_config.llm.timeout_seconds,
         )
+        result.source_query = query
         return result
     except Exception as exc:
         logger.warning(f"业务候选抽取失败，降级为显式元数据/RAG命中: {exc}")
@@ -102,7 +105,12 @@ def fallback_binding_candidates(
         FilterMention(raw_text=mention, field_hint="")
         for mention in _explicit_filter_mentions(query, retrieved_value_infos, enum_aliases)
     ]
-    return BindingCandidates(metric_mentions=metrics, filter_mentions=filters)
+    return BindingCandidates(
+        source_query=query,
+        extraction_failed=True,
+        metric_mentions=metrics,
+        filter_mentions=filters,
+    )
 
 
 def _explicit_metric_mentions(query: str, metric_infos: list[dict[str, Any]]) -> list[str]:

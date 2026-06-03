@@ -154,7 +154,7 @@ tables:
       - name: order_quantity
         role: measure
         description: 订单中商品的购买数量。
-        alias: [销量, 购买数量, 件数]
+        alias: [销量, 购买数量, 件数, 订单数量]
         sync: false
 
       - name: order_amount
