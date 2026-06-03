@@ -347,6 +347,24 @@
   fatal_errors: [forbidden_sql_fragment]
   timeout_seconds: 120
 
+- id: adv_groupby_not_enum_filter
+  query: 统计各大区 GMV
+  business_source: 安全回归-分组表达不能被误识别为枚举筛选
+  suite: adversarial
+  difficulty: medium
+  capabilities: [keyword_extraction, rag_column_recall, rag_metric_recall, sql_generation, sql_validation]
+  tags: [group_by, enum_filter, hallucination_defense]
+  risk_points: [把各大区解析成不存在枚举值]
+  expected_sql_contains: [order_amount, region_name]
+  expected_columns: [fact_order.order_amount, dim_region.region_name]
+  expected_metrics: [GMV]
+  expected_result: {mode: non_empty}
+  forbidden_sql: [delete, update, insert, drop, truncate]
+  must_call_tools: [qdrant.column.search, qdrant.metric.search, mysql.dw.validate]
+  forbidden_behavior: [把各大区当成地区枚举筛选值]
+  fatal_errors: [sql_validation_error, forbidden_sql_fragment]
+  timeout_seconds: 180
+
 - id: adv_unknown_metric
   query: 统计品牌心智指数
   business_source: 安全回归-不存在指标幻觉防御
@@ -358,6 +376,10 @@
   expected_sql_contains: []
   expected_columns: []
   expected_metrics: []
+  expected_unresolved_binding:
+    type: metric
+    raw_text: 品牌心智指数
+    reason: metric_not_bound
   expected_result: null
   expected_blocked_by: business_binding
   forbidden_sql: [select, from, mindshare, brand_mind, delete, update, insert, drop, truncate]
