@@ -49,36 +49,29 @@ All checks passed
 
 ```text
 pre_rag_guard
-  -> extract_keywords
-  -> recall_column / recall_value / recall_metric
-  -> merge_retrieved_info
+  -> context_builder
   -> business_binding
-  -> filter_metric / filter_table
-  -> add_extra_context
-  -> semantic_guard
+  -> context_compaction
   -> generate_sql
-  -> pre_sql_execution_validation
-  -> correct_sql 或 run_sql
+  -> sql_executor
 ```
 
 主要节点文件：
 
 - `app/agent/nodes/pre_rag_guard.py`
-- `app/agent/nodes/extract_keywords.py`
-- `app/agent/nodes/recall_column.py`
-- `app/agent/nodes/recall_value.py`
-- `app/agent/nodes/recall_metric.py`
-- `app/agent/nodes/merge_retrieved_info.py`
+- `app/agent/nodes/context_builder.py`
 - `app/agent/nodes/business_binding.py`
-- `app/agent/nodes/filter_metric.py`
-- `app/agent/nodes/filter_table.py`
-- `app/agent/nodes/add_extra_context.py`
-- `app/agent/nodes/semantic_guard.py`
+- `app/agent/nodes/context_compaction.py`
 - `app/agent/nodes/generate_sql.py`
-- `app/agent/nodes/pre_sql_execution_validation.py`
-- `app/agent/nodes/correct_sql.py`
-- `app/agent/nodes/fail_sql_correction.py`
-- `app/agent/nodes/run_sql.py`
+- `app/agent/nodes/sql_executor.py`
+
+第二层 helper：
+
+- `app/agent/retrieval_context.py`：SQL memory 召回、关键词抽取、字段/取值/指标召回、上下文合并。
+- `app/agent/context_compaction.py`：表上下文裁剪、指标上下文裁剪、运行时上下文补充。
+- `app/agent/sql/sql_guard.py`：SQL normalize、结构校验、安全校验、EXPLAIN 前置校验。
+- `app/agent/sql/sql_correction.py`：SQL 修正 helper。
+- `app/agent/sql/sql_executor.py`：真实 SQL 执行边界。
 
 ## 3. 当前 State 和 Context
 
@@ -101,7 +94,7 @@ Context 定义：
 - `metadata_build_version`
 - `metadata_cache_version`
 
-当前没有完整的会话记忆模型，也没有持久化 conversation memory。
+当前已有会话消息持久化和长期 SQL memory 基础实现，后续重点是用真实 conversation eval 收口边界。
 
 ## 4. 业务语义裁决层
 
@@ -143,19 +136,20 @@ business_binding:
 
 ## 5. RAG 与混合检索
 
-字段召回：
+RAG 和长期 SQL 经验召回由 `context_builder` 统一触发，具体 helper 在：
 
-- `app/agent/nodes/recall_column.py`
+- `app/agent/retrieval_context.py`
+
+字段召回 repository：
+
 - `app/repositories/qdrant/column_qdrant_repository.py`
 
-指标召回：
+指标召回 repository：
 
-- `app/agent/nodes/recall_metric.py`
 - `app/repositories/qdrant/metric_qdrant_repository.py`
 
-字段取值混合召回：
+字段取值混合召回 repository：
 
-- `app/agent/nodes/recall_value.py`
 - `app/repositories/es/value_es_repository.py`
 - `app/repositories/qdrant/value_qdrant_repository.py`
 - `app/retrieval/fusion.py`
@@ -232,33 +226,24 @@ SQL 生成：
 
 - `app/agent/nodes/generate_sql.py`
 
-SQL 修正：
+SQL 执行闭环：
 
-- `app/agent/nodes/correct_sql.py`
-
-SQL loop 路由：
-
-- `app/agent/sql_loop.py`
-
-执行前综合校验：
-
-- `app/agent/nodes/pre_sql_execution_validation.py`
-
-执行节点：
-
-- `app/agent/nodes/run_sql.py`
+- `app/agent/nodes/sql_executor.py`
+- `app/agent/sql/sql_guard.py`
+- `app/agent/sql/sql_correction.py`
+- `app/agent/sql/sql_executor.py`
 
 当前 SQL 链路：
 
 ```text
 generate_sql
-  -> pre_sql_execution_validation
-       pass             -> run_sql
-       repairable_error -> correct_sql -> pre_sql_execution_validation
+  -> sql_executor
+       pass             -> 执行 SQL
+       repairable_error -> SQL correction 后重新校验
        blocked          -> END
 ```
 
-`pre_sql_execution_validation` 当前覆盖：
+`sql_executor` 当前覆盖：
 
 - SQL normalize
 - 单 SELECT 解析
@@ -270,7 +255,7 @@ generate_sql
 - join relationship
 - MySQL explain
 
-`run_sql` 当前有 SQL 执行 timeout：
+SQL 执行 timeout：
 
 - 配置项：`agent.sql_execution_timeout_seconds`
 - 默认值：`60`
@@ -283,18 +268,19 @@ RAG 前输入安全：
 
 业务完整性检查：
 
-- `app/agent/nodes/semantic_guard.py`
+- `app/agent/nodes/business_binding.py`
 
 SQL 执行前硬校验：
 
-- `app/agent/nodes/pre_sql_execution_validation.py`
+- `app/agent/nodes/sql_executor.py`
+- `app/agent/sql/sql_guard.py`
 
 策略配置：
 
 - `conf/policy_config.yaml`
 - `app/conf/policy_config.py`
 
-当前 `semantic_guard` 主要消费：
+当前业务完整性检查主要消费：
 
 - `unresolved_bindings`
 - `ambiguous_bindings`
@@ -327,7 +313,7 @@ LLM 调用治理：
 
 - 普通结构化节点使用 fast model。
 - `generate_sql` 使用主模型，当前 thinking 可单独关闭。
-- `correct_sql` 使用主模型，当前 thinking 可单独开启。
+- SQL correction 使用主模型，当前 thinking 可单独开启。
 
 相关测试：
 
@@ -482,17 +468,17 @@ Eval scoring：
 
 ## 15. 当前已知风险
 
-1. `correct_sql` 仍可能出现长尾。历史 eval 中出现过单次接近 98.9s。
+1. SQL correction 仍可能出现长尾。历史 eval 中出现过单次接近 98.9s。
 
-2. `run_sql` 曾出现完整 eval 中偶发 180s 外层 timeout。当前已加节点内 SQL execution timeout 和 eval 归因降噪。
+2. SQL execution 曾出现完整 eval 中偶发 180s 外层 timeout。当前已加节点内 SQL execution timeout 和 eval 归因降噪。
 
-3. `filter_table` 当前只做上下文负载瘦身，不做语义裁列。之前尝试语义裁列会丢失 group-by 维度上下文。
+3. `context_compaction` 当前只做上下文负载瘦身，不做语义裁列。之前尝试语义裁列会丢失 group-by 维度上下文。
 
 4. 当前 eval 是项目内公开回归集，不是隐藏 benchmark。
 
 5. 当前缓存主要是进程内缓存，多实例一致性没有实现。
 
-6. 当前没有完整的多轮会话状态、追问改写节点、会话持久化或 conversation eval suite。
+6. 当前已有会话消息持久化和长期 SQL memory 基础实现，但真实 conversation eval 仍需继续收口。
 
 7. 当前时间 binding 支持有限，主要是季度、月份和日期。
 
@@ -514,16 +500,14 @@ uv run python -m app.scripts.run_eval --cases examples/eval_cases.yaml --output 
 - 字段、指标、字段取值召回。
 - 字段取值混合检索。
 - 业务绑定层。
-- SQL 生成、执行前校验、修正循环、执行节点。
+- SQL 生成、执行前校验、修正循环、执行工具边界。
 - 安全 guardrail。
 - usage / cost / latency 观测。
 - LLM cache、embedding cache、限流、retry、熔断、调用预算。
 - 单轮系统化 eval。
+- 会话消息持久化和长期 SQL memory 基础实现。
 
 当前仓库尚未具备：
 
-- 多轮会话记忆。
-- 追问改写。
-- 会话级状态管理。
-- 会话持久化。
-- conversation eval runner / conversation eval cases。
+- 完整稳定的真实 conversation eval runner。
+- 更成熟的多轮记忆边界验收。

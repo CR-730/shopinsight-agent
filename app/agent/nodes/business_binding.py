@@ -75,8 +75,7 @@ async def business_binding(
     }
 
     logger.info(f"业务绑定结果：{binding}")
-    writer({"type": "progress", "step": step, "status": "success"})
-    return {
+    update = {
         "business_binding": binding,
         "metric_bindings": metric_bindings,
         "resolved_filters": resolved_filters,
@@ -84,7 +83,40 @@ async def business_binding(
         "validated_enum_values": validated_enum_values,
         "unresolved_bindings": unresolved_bindings,
         "ambiguous_bindings": [],
+        "safety_error": None,
     }
+    rule_error = validate_business_binding_state(update)
+    if rule_error:
+        logger.warning(f"{step} blocked query: {rule_error}")
+        writer(
+            {"type": "progress", "step": step, "status": "blocked", "error": rule_error}
+        )
+        return {**update, "safety_error": rule_error, "blocked_by": "business_binding"}
+    writer({"type": "progress", "step": step, "status": "success"})
+    return update
+
+
+def validate_business_binding_state(state: dict[str, Any]) -> str | None:
+    """Return a blocking message when binding did not fully resolve business objects."""
+
+    unresolved = state.get("unresolved_bindings") or []
+    if unresolved:
+        issue = unresolved[0]
+        return _binding_issue_message(issue, "unresolved")
+
+    ambiguous = state.get("ambiguous_bindings") or []
+    if ambiguous:
+        issue = ambiguous[0]
+        return _binding_issue_message(issue, "ambiguous")
+
+    return None
+
+
+def _binding_issue_message(issue: dict[str, Any], status: str) -> str:
+    issue_type = issue.get("type") or "business_object"
+    raw_text = issue.get("raw_text") or ""
+    reason = issue.get("reason") or "unknown"
+    return f"business_binding {status}: {issue_type}={raw_text}, reason={reason}"
 
 
 def resolve_metric_bindings(

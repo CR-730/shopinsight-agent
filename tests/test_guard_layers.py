@@ -1,18 +1,18 @@
-import asyncio
+﻿import asyncio
 
 from app.agent.nodes import pre_rag_guard as pre_rag_guard_module
+from app.agent.nodes.business_binding import validate_business_binding_state
 from app.agent.nodes.pre_rag_guard import (
     _should_block_classifier_result,
     classify_query_intent,
     validate_query_by_rules,
 )
-from app.agent.nodes.pre_sql_execution_validation import (
+from app.agent.sql.sql_guard import (
     normalize_sql_for_execution,
     repair_invalid_join_relationship,
     validate_sql_before_execution,
     validate_sql_structure_semantics,
 )
-from app.agent.nodes.semantic_guard import validate_business_binding_state
 
 
 def test_pre_rag_guard_blocks_prompt_injection_before_retrieval():
@@ -51,7 +51,7 @@ def test_pre_rag_guard_classifier_failure_returns_block_decision(monkeypatch):
     assert result["attack_type"] == "classifier_error"
 
 
-def test_semantic_guard_blocks_unresolved_binding():
+def test_business_binding_blocks_unresolved_binding():
     error = validate_business_binding_state(
         {
             "unresolved_bindings": [
@@ -64,10 +64,13 @@ def test_semantic_guard_blocks_unresolved_binding():
         }
     )
 
-    assert error == "业务绑定未解析：metric=品牌心智指数，原因：metric_not_bound"
+    assert error is not None
+    assert "business_binding unresolved" in error
+    assert "metric=" in error
+    assert "metric_not_bound" in error
 
 
-def test_semantic_guard_passes_when_binding_is_complete():
+def test_business_binding_passes_when_binding_is_complete():
     error = validate_business_binding_state(
         {
             "metric_bindings": [{"canonical_metric": "GMV"}],

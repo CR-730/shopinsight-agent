@@ -1,63 +1,173 @@
-"""Conversation memory helpers for multi-turn analytics."""
+"""Vanna-style conversation store and agent memory primitives."""
 
 from __future__ import annotations
 
-from typing import Any, TypedDict
+from datetime import UTC, datetime
+from typing import Any
+
+from pydantic import BaseModel, Field
+
+SQL_TOOL_NAME = "run_sql"
 
 
-class ConversationSnapshot(TypedDict, total=False):
-    """Persisted state used to rewrite follow-up questions."""
-
-    last_metric_bindings: list[dict[str, Any]]
-    last_resolved_filters: list[dict[str, Any]]
-    last_time_binding: dict[str, Any] | None
-    last_sql: str | None
-    last_answer_summary: str | None
-    recent_turns_summary: list[dict[str, Any]]
+class Message(BaseModel):
+    role: str
+    content: str
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
 
-def build_answer_summary(answer: Any) -> str:
-    """Build a compact, non-sensitive summary of a SQL result."""
+class Conversation(BaseModel):
+    id: str
+    user_id: str
+    messages: list[Message] = Field(default_factory=list)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
-    if not isinstance(answer, list):
-        return "未返回表格结果"
-    if not answer:
-        return "返回 0 行"
-
-    first_row = answer[0]
-    if isinstance(first_row, dict):
-        columns = ", ".join(str(key) for key in first_row.keys())
-        return f"返回 {len(answer)} 行，字段：{columns}"
-    return f"返回 {len(answer)} 行"
+    def add_message(self, message: Message) -> None:
+        self.messages.append(message)
+        self.updated_at = datetime.now(UTC)
 
 
-def build_snapshot_from_state(
-    state: dict[str, Any],
-) -> ConversationSnapshot | None:
-    """Create a snapshot from a completed graph state."""
+class ToolMemory(BaseModel):
+    memory_id: str | None = None
+    question: str
+    tool_name: str
+    args: dict[str, Any]
+    timestamp: str | None = None
+    success: bool = True
+    metadata: dict[str, Any] = Field(default_factory=dict)
 
-    metric_bindings = list(
-        state.get("metric_bindings")
-        or (state.get("business_binding") or {}).get("metrics")
-        or []
-    )
+
+class TextMemory(BaseModel):
+    memory_id: str | None = None
+    content: str
+    timestamp: str | None = None
+
+
+class ToolMemorySearchResult(BaseModel):
+    memory: ToolMemory
+    similarity_score: float
+    rank: int
+
+
+class TextMemorySearchResult(BaseModel):
+    memory: TextMemory
+    similarity_score: float
+    rank: int
+
+
+class InMemoryConversationStore:
+    """Small local implementation matching Vanna's MemoryConversationStore."""
+
+    def __init__(self) -> None:
+        self._conversations: dict[str, Conversation] = {}
+
+    async def create_conversation(
+        self, conversation_id: str, user_id: str, initial_message: str
+    ) -> Conversation:
+        conversation = Conversation(
+            id=conversation_id,
+            user_id=user_id,
+            messages=[Message(role="user", content=initial_message)],
+        )
+        self._conversations[conversation_id] = conversation
+        return conversation
+
+    async def get_conversation(
+        self, conversation_id: str, user_id: str
+    ) -> Conversation | None:
+        conversation = self._conversations.get(conversation_id)
+        if conversation and conversation.user_id == user_id:
+            return conversation
+        return None
+
+    async def update_conversation(self, conversation: Conversation) -> None:
+        self._conversations[conversation.id] = conversation
+
+    async def delete_conversation(self, conversation_id: str, user_id: str) -> bool:
+        conversation = await self.get_conversation(conversation_id, user_id)
+        if not conversation:
+            return False
+        del self._conversations[conversation_id]
+        return True
+
+    async def list_conversations(
+        self, user_id: str, limit: int = 50, offset: int = 0
+    ) -> list[Conversation]:
+        conversations = [
+            item for item in self._conversations.values() if item.user_id == user_id
+        ]
+        conversations.sort(key=lambda item: item.updated_at, reverse=True)
+        return conversations[offset : offset + limit]
+
+
+def build_sql_tool_memory(question: str, state: dict[str, Any]) -> ToolMemory | None:
+    sql = str(state.get("sql") or "").strip()
+    final_answer = state.get("final_answer") or []
+    business_binding = _trusted_business_binding(state)
     if (
-        state.get("blocked_by")
-        or state.get("safety_error")
+        not sql
+        or not final_answer
+        or not business_binding
         or state.get("error")
+        or state.get("blocked_by")
+        or state.get("safety_error")
         or state.get("exception_stage")
         or state.get("unresolved_bindings")
         or state.get("ambiguous_bindings")
-        or state.get("final_answer") is None
-        or not metric_bindings
     ):
         return None
+    return ToolMemory(
+        question=question,
+        tool_name=SQL_TOOL_NAME,
+        args={
+            "sql": sql,
+            "business_binding": business_binding,
+        },
+        success=True,
+    )
 
+
+def format_conversation_history(messages: list[Message], limit: int = 8) -> str:
+    return "\n".join(
+        f"{message.role}: {message.content}" for message in messages[-limit:]
+    )
+
+
+def format_tool_memory_results(results: list[ToolMemorySearchResult]) -> str:
+    if not results:
+        return ""
+    lines: list[str] = []
+    for result in results:
+        sql = str(result.memory.args.get("sql") or "")
+        lines.append(
+            f"{result.rank}. question: {result.memory.question}\n"
+            f"   sql: {sql}\n"
+            f"   similarity: {result.similarity_score:.2f}"
+        )
+    return "\n".join(lines)
+
+
+def build_retrieval_query(query: str, conversation_history: str) -> str:
+    user_history = [
+        line for line in conversation_history.splitlines() if line.startswith("user:")
+    ]
+    context = "\n".join(user_history[-2:])
+    return f"{context}\nuser: {query}" if context else query
+
+
+def _trusted_business_binding(state: dict[str, Any]) -> dict[str, Any]:
+    binding = dict(state.get("business_binding") or {})
+    if state.get("metric_bindings"):
+        binding.setdefault("metrics", state["metric_bindings"])
+    if state.get("resolved_filters"):
+        binding.setdefault("filters", state["resolved_filters"])
+    if state.get("time_binding"):
+        binding.setdefault("time", state["time_binding"])
     return {
-        "last_metric_bindings": metric_bindings,
-        "last_resolved_filters": list(state.get("resolved_filters") or []),
-        "last_time_binding": state.get("time_binding"),
-        "last_sql": state.get("sql"),
-        "last_answer_summary": build_answer_summary(state.get("final_answer")),
-        "recent_turns_summary": [],
+        key: value
+        for key, value in binding.items()
+        if key in {"metrics", "filters", "time"} and value
     }

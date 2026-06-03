@@ -96,11 +96,10 @@ export default function App() {
           if (message.id !== assistantId) return message;
 
           if (event.type === "conversation") {
-            setConversationId(event.conversation_id);
+            setConversationId(event.data.conversation_id);
             return {
               ...message,
-              conversationId: event.conversation_id,
-              rewrittenQuery: event.rewritten_query,
+              conversationId: event.data.conversation_id,
             };
           }
 

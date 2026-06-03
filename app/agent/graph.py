@@ -1,10 +1,11 @@
-"""
-电商问数 Agent 图编排
+﻿"""Agent graph for the e-commerce NL2SQL flow.
 
-使用 LangGraph 把问数智能体的各个节点串成一条可观测的执行链路
-当前链路已经落地关键词抽取和多路召回，字段和指标走 Qdrant 向量检索，字段取值走 ES 全文检索
-整体流程先抽取用户问题关键词，再并行召回字段 字段取值和指标信息，
-随后合并召回结果 过滤候选表和指标 补充额外上下文，最后生成 校验 修正并执行 SQL
+The visible graph is intentionally compact:
+input guard -> context builder -> business binding -> context compaction
+-> SQL generation -> SQL executor.
+
+Detailed retrieval, context pruning, SQL validation, correction, and execution
+live inside helper modules so graph.py shows product-level stages only.
 """
 
 import asyncio
@@ -15,24 +16,13 @@ from langgraph.graph import StateGraph
 from app.agent.context import DataAgentContext
 from app.agent.cost import CostRates, CostTracker
 from app.agent.node_observer import traced_node
-from app.agent.nodes.add_extra_context import add_extra_context
 from app.agent.nodes.business_binding import business_binding
-from app.agent.nodes.correct_sql import correct_sql
-from app.agent.nodes.extract_keywords import extract_keywords
-from app.agent.nodes.fail_sql_correction import fail_sql_correction
-from app.agent.nodes.filter_metric import filter_metric
-from app.agent.nodes.filter_table import filter_table
+from app.agent.nodes.context_builder import context_builder
+from app.agent.nodes.context_compaction import context_compaction
 from app.agent.nodes.generate_sql import generate_sql
-from app.agent.nodes.merge_retrieved_info import merge_retrieved_info
 from app.agent.nodes.pre_rag_guard import pre_rag_guard
-from app.agent.nodes.pre_sql_execution_validation import pre_sql_execution_validation
-from app.agent.nodes.recall_column import recall_column
-from app.agent.nodes.recall_metric import recall_metric
-from app.agent.nodes.recall_value import recall_value
-from app.agent.nodes.run_sql import run_sql
-from app.agent.nodes.semantic_guard import semantic_guard
+from app.agent.nodes.sql_executor import sql_executor
 from app.agent.sql_loop import (
-    route_after_pre_sql_execution_validation,
     route_after_safety_guard,
 )
 from app.agent.state import DataAgentState
@@ -54,84 +44,43 @@ from app.repositories.qdrant.value_qdrant_repository import ValueQdrantRepositor
 graph_builder = StateGraph(state_schema=DataAgentState, context_schema=DataAgentContext)
 
 # 注册节点：每个节点负责问数链路中的一个清晰步骤
-graph_builder.add_node("extract_keywords", traced_node("extract_keywords", extract_keywords))
 graph_builder.add_node("pre_rag_guard", traced_node("pre_rag_guard", pre_rag_guard))
-graph_builder.add_node("recall_column", traced_node("recall_column", recall_column))
-graph_builder.add_node("recall_value", traced_node("recall_value", recall_value))
-graph_builder.add_node("recall_metric", traced_node("recall_metric", recall_metric))
-graph_builder.add_node(
-    "merge_retrieved_info", traced_node("merge_retrieved_info", merge_retrieved_info)
-)
-graph_builder.add_node("filter_metric", traced_node("filter_metric", filter_metric))
+graph_builder.add_node("context_builder", traced_node("context_builder", context_builder))
 graph_builder.add_node("business_binding", traced_node("business_binding", business_binding))
-graph_builder.add_node("filter_table", traced_node("filter_table", filter_table))
-graph_builder.add_node("add_extra_context", traced_node("add_extra_context", add_extra_context))
-graph_builder.add_node("semantic_guard", traced_node("semantic_guard", semantic_guard))
+graph_builder.add_node(
+    "context_compaction", traced_node("context_compaction", context_compaction)
+)
 graph_builder.add_node("generate_sql", traced_node("generate_sql", generate_sql))
-graph_builder.add_node(
-    "pre_sql_execution_validation",
-    traced_node("pre_sql_execution_validation", pre_sql_execution_validation),
-)
-graph_builder.add_node("correct_sql", traced_node("correct_sql", correct_sql))
-graph_builder.add_node(
-    "fail_sql_correction", traced_node("fail_sql_correction", fail_sql_correction)
-)
-graph_builder.add_node("run_sql", traced_node("run_sql", run_sql))
+graph_builder.add_node("sql_executor", traced_node("sql_executor", sql_executor))
 
-# 从用户问题开始，先抽取关键词作为后续检索的基础
+# Start with the input guard, then build retrieval context before binding.
 graph_builder.add_edge(START, "pre_rag_guard")
 graph_builder.add_conditional_edges(
     source="pre_rag_guard",
     path=route_after_safety_guard,
     path_map={
-        "continue": "extract_keywords",
+        "continue": "context_builder",
         "blocked": END,
     },
 )
+graph_builder.add_edge("context_builder", "business_binding")
 
-# 关键词抽取后并行进入三类召回，分别面向字段 字段值和业务指标
-graph_builder.add_edge("extract_keywords", "recall_column")
-graph_builder.add_edge("extract_keywords", "recall_value")
-graph_builder.add_edge("extract_keywords", "recall_metric")
-
-# 三路召回都完成后，再进入统一的信息合并节点
-graph_builder.add_edge("recall_column", "merge_retrieved_info")
-graph_builder.add_edge("recall_value", "merge_retrieved_info")
-graph_builder.add_edge("recall_metric", "merge_retrieved_info")
-
-# 合并后的候选信息继续拆成表过滤和指标过滤两条线
-graph_builder.add_edge("merge_retrieved_info", "business_binding")
-graph_builder.add_edge("business_binding", "filter_table")
-graph_builder.add_edge("business_binding", "filter_metric")
-
-# 表和指标都过滤完成后，统一补充生成 SQL 所需的上下文
-graph_builder.add_edge("filter_table", "add_extra_context")
-graph_builder.add_edge("filter_metric", "add_extra_context")
-graph_builder.add_edge("add_extra_context", "semantic_guard")
+# Business binding is the only business-level blocking decision.
 graph_builder.add_conditional_edges(
-    source="semantic_guard",
+    source="business_binding",
     path=route_after_safety_guard,
     path_map={
-        "continue": "generate_sql",
+        "continue": "context_compaction",
         "blocked": END,
     },
 )
-graph_builder.add_edge("generate_sql", "pre_sql_execution_validation")
 
-# SQL 校验通过就直接执行，校验失败则先进入修正节点
-graph_builder.add_conditional_edges(
-    source="pre_sql_execution_validation",
-    path=route_after_pre_sql_execution_validation,
-    path_map={
-        "pass": "run_sql",
-        "repairable_error": "correct_sql",
-        "fail_sql_correction": "fail_sql_correction",
-        "blocked": END,
-    },
-)
-graph_builder.add_edge("correct_sql", "pre_sql_execution_validation")
-graph_builder.add_edge("fail_sql_correction", END)
-graph_builder.add_edge("run_sql", END)
+# Compact table and metric context, then add runtime SQL context.
+graph_builder.add_edge("context_compaction", "generate_sql")
+graph_builder.add_edge("generate_sql", "sql_executor")
+
+# SQL validation, correction, and execution are hidden behind one graph node.
+graph_builder.add_edge("sql_executor", END)
 
 # 编译后的 graph 是对外使用的 Agent 执行入口
 graph = graph_builder.compile()
@@ -194,3 +143,4 @@ if __name__ == "__main__":
         await dw_mysql_client_manager.close()
 
     asyncio.run(test())
+

@@ -21,10 +21,11 @@ from app.clients.mysql_client_manager import (
 from app.clients.qdrant_client_manager import qdrant_client_manager
 from app.repositories.es.value_es_repository import ValueESRepository
 from app.repositories.mysql.dw.dw_mysql_repository import DWMySQLRepository
-from app.repositories.mysql.meta.conversation_memory_repository import (
-    ConversationMemoryRepository,
-)
+from app.repositories.mysql.meta.agent_memory_repository import AgentMemoryRepository
 from app.repositories.mysql.meta.meta_mysql_repository import MetaMySQLRepository
+from app.repositories.qdrant.agent_memory_qdrant_repository import (
+    AgentMemoryQdrantRepository,
+)
 from app.repositories.qdrant.column_qdrant_repository import ColumnQdrantRepository
 from app.repositories.qdrant.metric_qdrant_repository import MetricQdrantRepository
 from app.repositories.qdrant.value_qdrant_repository import ValueQdrantRepository
@@ -47,18 +48,22 @@ async def get_meta_mysql_repository(
     return MetaMySQLRepository(session)
 
 
-async def get_conversation_memory_repository(
-    session: Annotated[AsyncSession, Depends(get_meta_session)],
-) -> ConversationMemoryRepository:
-    """基于请求级 Session 创建会话记忆仓储"""
-
-    return ConversationMemoryRepository(session)
-
-
 async def get_embedding_client() -> Embeddings:
     """获取应用启动阶段初始化好的 Embedding 客户端"""
 
     return embedding_client_manager.client
+
+
+async def get_agent_memory_repository(
+    session: Annotated[AsyncSession, Depends(get_meta_session)],
+    embedding_client: Annotated[Embeddings, Depends(get_embedding_client)],
+) -> AgentMemoryRepository:
+    """基于 Meta MySQL 创建 Vanna 风格记忆仓储。"""
+
+    return AgentMemoryRepository(
+        session,
+        AgentMemoryQdrantRepository(qdrant_client_manager.client, embedding_client),
+    )
 
 
 async def get_dw_session():
@@ -104,6 +109,9 @@ async def get_query_service(
     meta_mysql_repository: Annotated[
         MetaMySQLRepository, Depends(get_meta_mysql_repository)
     ],
+    agent_memory_repository: Annotated[
+        AgentMemoryRepository, Depends(get_agent_memory_repository)
+    ],
     embedding_client: Annotated[
         Embeddings, Depends(get_embedding_client)
     ],
@@ -118,20 +126,17 @@ async def get_query_service(
     value_qdrant_repository: Annotated[
         ValueQdrantRepository, Depends(get_value_qdrant_repository)
     ],
-    conversation_memory_repository: Annotated[
-        ConversationMemoryRepository, Depends(get_conversation_memory_repository)
-    ],
 ) -> QueryService:
     """组装一次查询所需的业务服务"""
 
     # QueryService 只接收已经创建好的依赖对象，本身不关心这些对象来自 MySQL、Qdrant 还是 ES
     return QueryService(
         meta_mysql_repository=meta_mysql_repository,
+        agent_memory_repository=agent_memory_repository,
         embedding_client=embedding_client,
         dw_mysql_repository=dw_mysql_repository,
         column_qdrant_repository=column_qdrant_repository,
         metric_qdrant_repository=metric_qdrant_repository,
         value_es_repository=value_es_repository,
         value_qdrant_repository=value_qdrant_repository,
-        conversation_memory_repository=conversation_memory_repository,
     )

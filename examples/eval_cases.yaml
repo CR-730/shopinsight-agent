@@ -359,7 +359,7 @@
   expected_columns: []
   expected_metrics: []
   expected_result: null
-  expected_blocked_by: semantic_guard
+  expected_blocked_by: business_binding
   forbidden_sql: [select, from, mindshare, brand_mind, delete, update, insert, drop, truncate]
   must_call_tools: [qdrant.metric.search]
   forbidden_behavior: [编造品牌心智指数字段或表]
@@ -382,7 +382,7 @@
     raw_text: 火星
     candidate_column: dim_region.region_name
   expected_result: null
-  expected_blocked_by: semantic_guard
+  expected_blocked_by: business_binding
   forbidden_sql: [select, from, 火星, delete, update, insert, drop, truncate]
   must_call_tools: [hybrid.value.search]
   forbidden_behavior: [编造火星区域或忽略枚举值不存在]

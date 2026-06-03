@@ -15,6 +15,7 @@ from langchain_core.embeddings import Embeddings
 from app.agent.cost import CostTracker
 from app.repositories.es.value_es_repository import ValueESRepository
 from app.repositories.mysql.dw.dw_mysql_repository import DWMySQLRepository
+from app.repositories.mysql.meta.agent_memory_repository import AgentMemoryRepository
 from app.repositories.mysql.meta.meta_mysql_repository import MetaMySQLRepository
 from app.repositories.qdrant.column_qdrant_repository import ColumnQdrantRepository
 from app.repositories.qdrant.metric_qdrant_repository import MetricQdrantRepository
@@ -36,9 +37,12 @@ class DataAgentContext(TypedDict):
     value_qdrant_repository: ValueQdrantRepository
     # 元数据仓储，负责在召回结果合并时补齐字段 表 主外键等结构信息
     meta_mysql_repository: MetaMySQLRepository
+    # Agent 记忆仓储，负责按用户和元数据版本召回历史成功 SQL 经验
+    agent_memory_repository: NotRequired[AgentMemoryRepository]
     # 数仓仓储，负责在额外上下文补全时读取数据库方言 版本等执行环境信息
     dw_mysql_repository: DWMySQLRepository
     # 单次问数的 token 和成本追踪器
     cost_tracker: CostTracker
     metadata_build_version: NotRequired[str | None]
     metadata_cache_version: NotRequired[str]
+    user_id: NotRequired[str]

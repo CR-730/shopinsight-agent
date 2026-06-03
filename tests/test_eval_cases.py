@@ -5,13 +5,35 @@ from app.scripts.run_eval import _infer_exception_stage
 
 
 def test_infer_exception_stage_uses_traceback_node_name():
-    def recall_value():
+    def recall_value_context():
         raise RuntimeError("LLM quota exhausted")
 
     try:
-        recall_value()
+        recall_value_context()
     except RuntimeError as exc:
         assert _infer_exception_stage(exc) == "rag_recall"
+
+
+def test_infer_exception_stage_uses_compacted_graph_names():
+    def context_compaction():
+        raise RuntimeError("context failed")
+
+    def correct_sql_candidate():
+        raise RuntimeError("sql correction failed")
+
+    def sql_executor():
+        raise RuntimeError("sql execution failed")
+
+    cases = [
+        (context_compaction, "context_filter"),
+        (correct_sql_candidate, "sql_validation"),
+        (sql_executor, "tool_execution"),
+    ]
+    for fn, expected_stage in cases:
+        try:
+            fn()
+        except RuntimeError as exc:
+            assert _infer_exception_stage(exc) == expected_stage
 
 
 def test_evaluate_case_passes_when_sql_and_context_match():
@@ -64,7 +86,7 @@ def test_evaluate_case_checks_expected_unresolved_binding():
     case = EvalCase(
         id="unknown_region",
         query="火星区域的销售额是多少",
-        expected_blocked_by="semantic_guard",
+        expected_blocked_by="business_binding",
         expected_unresolved_binding={
             "type": "enum_value",
             "raw_text": "火星",
@@ -76,7 +98,7 @@ def test_evaluate_case_checks_expected_unresolved_binding():
         "error": None,
         "sql": "",
         "safety_error": "业务绑定未解析",
-        "blocked_by": "semantic_guard",
+        "blocked_by": "business_binding",
         "unresolved_bindings": [
             {
                 "type": "enum_value",

@@ -225,17 +225,28 @@ def _json_default(value: Any) -> Any:
 
 def _infer_exception_stage(exc: Exception) -> str:
     text = "".join(traceback.format_exception(exc)).lower()
-    if "recall_value" in text or "recall_column" in text or "recall_metric" in text:
+    if (
+        "context_builder" in text
+        or "retrieval_context" in text
+        or "recall_value_context" in text
+        or "recall_column_context" in text
+        or "recall_metric_context" in text
+    ):
         return "rag_recall"
-    if "filter_table" in text or "filter_metric" in text:
+    if (
+        "context_compaction" in text
+        or "filter_table_context" in text
+        or "filter_metric_context" in text
+        or "add_runtime_context" in text
+    ):
         return "context_filter"
     if "generate_sql" in text:
         return "sql_generation"
-    if "correct_sql" in text:
+    if "sql_correction" in text or "correct_sql_candidate" in text:
         return "sql_validation"
-    if "validate_sql" in text:
+    if "sql_guard" in text or "validate_sql" in text:
         return "sql_validation"
-    if "run_sql" in text:
+    if "sql_executor" in text:
         return "tool_execution"
     if "qdrant" in text or "elastic" in text or "connection attempts failed" in text:
         return "rag_recall"

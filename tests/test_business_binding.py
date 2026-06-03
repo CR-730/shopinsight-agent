@@ -1,4 +1,4 @@
-import asyncio
+﻿import asyncio
 
 from app.agent.nodes.business_binding import (
     business_binding,
@@ -308,34 +308,27 @@ def test_business_binding_node_returns_metric_and_value_bindings():
 
 
 def test_filter_metric_prunes_by_bound_metric_without_llm():
-    from app.agent.nodes.filter_metric import filter_metric
+    from app.agent.context_compaction import filter_metric_context
 
-    class Runtime:
-        stream_writer = staticmethod(lambda _: None)
-        context = {"cost_tracker": None}
-
-    result = asyncio.run(
-        filter_metric(
-            {
-                "query": "销售额最高的商品",
-                "metric_bindings": [{"canonical_metric": "GMV"}],
-                "metric_infos": [
-                    {
-                        "name": "GMV",
-                        "description": "Gross Merchandise Value",
-                        "alias": ["销售额"],
-                        "relevant_columns": ["fact_order.order_amount"],
-                    },
-                    {
-                        "name": "AOV",
-                        "description": "Average Order Value",
-                        "alias": ["客单价"],
-                        "relevant_columns": ["fact_order.order_amount"],
-                    },
-                ],
-            },
-            Runtime(),
-        )
+    result = filter_metric_context(
+        {
+            "query": "销售额最高的商品",
+            "metric_bindings": [{"canonical_metric": "GMV"}],
+            "metric_infos": [
+                {
+                    "name": "GMV",
+                    "description": "Gross Merchandise Value",
+                    "alias": ["销售额"],
+                    "relevant_columns": ["fact_order.order_amount"],
+                },
+                {
+                    "name": "AOV",
+                    "description": "Average Order Value",
+                    "alias": ["客单价"],
+                    "relevant_columns": ["fact_order.order_amount"],
+                },
+            ],
+        }
     )
 
     assert [metric["name"] for metric in result["metric_infos"]] == ["GMV"]

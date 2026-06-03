@@ -7,7 +7,7 @@ State 是 LangGraph 各节点之间传递和更新的共享数据
 SQL 生成闭环会继续写入候选 SQL 以及校验错误信息，用于控制校正或执行分支
 """
 
-from typing import TypedDict
+from typing import NotRequired, TypedDict
 
 from app.entities.column_info import ColumnInfo
 from app.entities.metric_info import MetricInfo
@@ -121,6 +121,8 @@ class DataAgentState(TypedDict):
     """一次问数链路中的核心状态"""
 
     query: str  # 用户输入的查询
+    conversation_history: NotRequired[str]
+    sql_memory_context: NotRequired[str]
     keywords: list[str]  # 抽取的关键词
     retrieved_column_infos: list[ColumnInfo]  # 检索到的字段信息
     retrieved_metric_infos: list[MetricInfo]  # 检索到的指标信息

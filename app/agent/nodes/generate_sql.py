@@ -35,6 +35,8 @@ async def generate_sql(state: DataAgentState, runtime: Runtime[DataAgentContext]
         date_info = state["date_info"]
         db_info = state["db_info"]
         query = state["query"]
+        conversation_history = state.get("conversation_history") or "无"
+        sql_memory_context = state.get("sql_memory_context") or "无"
 
         prompt = PromptTemplate(
             template=load_prompt("generate_sql"),
@@ -42,6 +44,8 @@ async def generate_sql(state: DataAgentState, runtime: Runtime[DataAgentContext]
                 "table_infos",
                 "metric_infos",
                 "business_bindings",
+                "conversation_history",
+                "sql_memory_context",
                 "date_info",
                 "db_info",
                 "query",
@@ -68,6 +72,8 @@ async def generate_sql(state: DataAgentState, runtime: Runtime[DataAgentContext]
                     allow_unicode=True,
                     sort_keys=False,
                 ),
+                "conversation_history": conversation_history,
+                "sql_memory_context": sql_memory_context,
                 "date_info": yaml.dump(date_info, allow_unicode=True, sort_keys=False),
                 "db_info": yaml.dump(db_info, allow_unicode=True, sort_keys=False),
                 "query": query,

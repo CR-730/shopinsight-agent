@@ -5,6 +5,7 @@
 import type { AgentEvent } from "../types/agent";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL?.replace(/\/$/, "") ?? "";
+const USER_ID_KEY = "shopkeeper-agent-user-id";
 
 type QueryOptions = {
   signal?: AbortSignal;
@@ -22,6 +23,7 @@ export async function streamQuery(query: string, options: QueryOptions) {
     body: JSON.stringify({
       query,
       conversation_id: options.conversationId ?? undefined,
+      user_id: getUserId(),
     }),
     signal: options.signal,
   });
@@ -59,6 +61,14 @@ export async function streamQuery(query: string, options: QueryOptions) {
   if (tail) {
     options.onEvent(tail);
   }
+}
+
+function getUserId() {
+  const existing = localStorage.getItem(USER_ID_KEY);
+  if (existing) return existing;
+  const userId = crypto.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  localStorage.setItem(USER_ID_KEY, userId);
+  return userId;
 }
 
 function parseSseChunk(chunk: string): AgentEvent | null {

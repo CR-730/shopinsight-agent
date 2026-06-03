@@ -1,4 +1,4 @@
-from app.agent.nodes.filter_table import compact_table_context_for_filtering
+from app.agent.context_compaction import compact_table_context_for_filtering
 
 
 def test_compact_table_context_preserves_candidates_but_drops_heavy_fields():

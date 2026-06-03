@@ -40,8 +40,10 @@ export type UsageEvent = {
 
 export type ConversationEvent = {
   type: "conversation";
-  conversation_id: string;
-  rewritten_query: string;
+  data: {
+    conversation_id: string;
+    user_id: string;
+  };
 };
 
 export type AgentEvent =
@@ -68,5 +70,4 @@ export type ChatMessage = {
   error?: string;
   usage?: UsageSummary;
   conversationId?: string;
-  rewrittenQuery?: string;
 };

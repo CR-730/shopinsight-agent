@@ -6,16 +6,19 @@
 
 ```text
 pre_rag_guard
-  -> RAG recall
-  -> merge_retrieved_info
+  -> context_builder
   -> business_binding
-  -> filter_table / filter_metric
-  -> add_extra_context
-  -> semantic_guard
+  -> context_compaction
   -> generate_sql
-  -> pre_sql_execution_validation
-  -> run_sql
+  -> sql_executor
 ```
+
+当前 `graph.py` 只保留产品级概念节点：
+
+- `context_builder`：召回长期 SQL 经验、抽取检索关键词、召回字段/取值/指标并合并上下文；内部 helper 位于 `app.agent.retrieval_context`。
+- `business_binding`：把当前问题绑定为结构化指标、筛选、时间和 unresolved/ambiguous 结果。
+- `context_compaction`：按 binding 裁剪表和指标上下文，并补充运行时上下文；内部 helper 位于 `app.agent.context_compaction`。
+- `sql_executor`：收拢 SQL 规范化、执行前校验、确定性修复、可选纠错和真实执行；内部 helper 位于 `app.agent.sql`。
 
 ## 职责边界
 
@@ -46,7 +49,7 @@ metrics:
     confidence: high
 ```
 
-`filter_metric` 不再调用 LLM，也不再裁决指标是否存在。它只按 `business_binding.metrics[].canonical_metric` 裁剪上下文；没有 binding 时保留 RAG top-k。
+`context_compaction` 中的指标上下文裁剪不调用 LLM，也不裁决指标是否存在。它只按 `business_binding.metrics[].canonical_metric` 裁剪上下文；没有 binding 时保留 RAG top-k。
 
 ## Filters Binding
 
@@ -109,15 +112,15 @@ time:
 
 当前项目只有一个核心事实表，所以 `required_columns` 固定为 `fact_order.date_id`。如果后续增加多事实表，需要从已选表上下文推导事实表时间键。
 
-## Semantic Guard
+## Business Binding Guard
 
-`semantic_guard` 只做 binding 完整性检查：
+`business_binding` 在绑定完成后同时产出完整性检查结果：
 
 - `unresolved` 非空：阻断，不生成 SQL。
 - `ambiguous` 非空：阻断或追问。
 - 其余情况放行。
 
-它不再抽取指标，不再重新校验枚举，不再维护另一套业务判断。
+当前图里不再保留单独的 `semantic_guard` 节点，避免出现第二套业务裁决来源。
 
 ## SQL 生成
 
@@ -129,9 +132,9 @@ time:
 
 SQL 生成节点不承担业务裁决职责。
 
-## SQL 执行前校验
+## SQL Executor
 
-`pre_sql_execution_validation` 保持执行前硬闸门职责：
+`sql_executor` 是图上的唯一 SQL 闭环节点，内部复用 `app.agent.sql.sql_guard`、`app.agent.sql.sql_correction` 和 `app.agent.sql.sql_executor`：
 
 - 单 SELECT。
 - 危险 SQL。
@@ -139,8 +142,11 @@ SQL 生成节点不承担业务裁决职责。
 - 敏感字段。
 - 未绑定枚举值。
 - join 关系是否违反元数据。
+- `EXPLAIN` 预校验。
+- 可修复错误进入 SQL correction。
+- 最终执行成功后返回 `final_answer`，失败时保留明确错误状态。
 
-它不做自然语言业务解析，不再扩展指标别名判断。
+SQL executor 不做自然语言业务解析，不扩展指标别名判断。
 
 ## 当前验收
 

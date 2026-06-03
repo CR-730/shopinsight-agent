@@ -425,6 +425,6 @@ def _stage_for_tool(tool: str) -> FailureStage:
         return "tool_execution"
     if tool.startswith("llm.sql"):
         return "sql_generation"
-    if tool.startswith("semantic_guard"):
+    if tool.startswith("business_binding"):
         return "safety"
     return "tool_execution"

@@ -1,77 +1,17 @@
-"""Combined SQL syntax validation and deterministic pre-execution guard."""
+"""Shared SQL normalization, validation, and deterministic repair helpers."""
 
 import re
 from typing import Any
 
-from langgraph.runtime import Runtime
 from sqlglot import expressions as exp
 from sqlglot import parse
 from sqlglot.errors import ParseError
 
-from app.agent.context import DataAgentContext
-from app.agent.state import DataAgentState
 from app.conf.policy_config import load_policy_config
-from app.core.log import logger
-from app.repositories.mysql.dw.dw_mysql_repository import DWMySQLRepository
 
 AGGREGATE_PATTERN = re.compile(r"\b(sum|count|avg|min|max)\s*\(", re.IGNORECASE)
 ALIAS_PATTERN = re.compile(r"\bas\s+`?([\w\u4e00-\u9fff]+)`?", re.IGNORECASE)
 STRING_LITERAL_PATTERN = re.compile(r"'([^']+)'")
-
-
-async def pre_sql_execution_validation(
-    state: DataAgentState, runtime: Runtime[DataAgentContext]
-):
-    """Return repairable SQL errors, hard safety blocks, or pass before run_sql."""
-
-    writer = runtime.stream_writer
-    step = "SQL执行前综合校验"
-    writer({"type": "progress", "step": step, "status": "running"})
-
-    sql = normalize_sql_for_execution(state["sql"])
-    dw_mysql_repository: DWMySQLRepository = runtime.context["dw_mysql_repository"]
-
-    parse_error = _parse_single_select(sql)
-    if isinstance(parse_error, str):
-        logger.info(f"{step} repairable SQL parse error: {parse_error}")
-        writer({"type": "progress", "step": step, "status": "repairable_error"})
-        return {"sql": sql, "error": parse_error, "safety_error": None}
-
-    structure_error = validate_sql_structure_semantics(state, sql)
-    if structure_error:
-        logger.info(f"{step} repairable SQL structure error: {structure_error}")
-        writer({"type": "progress", "step": step, "status": "repairable_error"})
-        return {"sql": sql, "error": structure_error, "safety_error": None}
-
-    try:
-        await dw_mysql_repository.validate(sql)
-    except Exception as exc:
-        error = str(exc)
-        logger.info(f"{step} repairable SQL error: {error}")
-        writer({"type": "progress", "step": step, "status": "repairable_error"})
-        return {"sql": sql, "error": error, "safety_error": None}
-
-    safety_error = validate_sql_before_execution(state, sql)
-    if safety_error:
-        logger.warning(f"{step} blocked SQL: {safety_error}")
-        writer(
-            {
-                "type": "progress",
-                "step": step,
-                "status": "blocked",
-                "error": safety_error,
-            }
-        )
-        return {
-            "sql": sql,
-            "error": None,
-            "safety_error": safety_error,
-            "blocked_by": "pre_sql_execution_validation",
-        }
-
-    writer({"type": "progress", "step": step, "status": "success"})
-    logger.info("SQL 语法和执行前安全校验通过")
-    return {"sql": sql, "error": None, "safety_error": None}
 
 
 def normalize_sql_for_execution(sql: str) -> str:

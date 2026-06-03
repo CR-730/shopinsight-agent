@@ -13,7 +13,5 @@ class QuerySchema(BaseModel):
 
     # 前端请求体中的 query 字段，例如 {"query": "统计华北地区销售额"}
     query: str
-    # 可选会话编号；为空时后端会创建新会话
     conversation_id: str | None = None
-    # 可选用户编号；第一阶段只用于会话归属记录
     user_id: str | None = None
