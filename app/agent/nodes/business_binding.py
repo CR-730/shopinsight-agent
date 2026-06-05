@@ -45,6 +45,9 @@ async def business_binding(
         await runtime.context["meta_mysql_repository"].list_value_aliases()
     )
 
+    # QueryService may pre-extract candidates so the frontend can stream an
+    # early understanding message. Reuse them here to avoid a duplicate LLM
+    # call, but still validate only against metadata/RAG/DW evidence below.
     if state.get("binding_candidates"):
         candidates = BindingCandidates.model_validate(state["binding_candidates"])
     else:
