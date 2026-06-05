@@ -47,6 +47,7 @@ class BindingCandidates(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     source_query: str = Field(default="")
+    user_response: str = Field(default="")
     extraction_failed: bool = Field(default=False)
     metric_mentions: list[MetricMention] = Field(default_factory=list)
     filter_mentions: list[FilterMention] = Field(default_factory=list)
@@ -58,6 +59,7 @@ async def extract_binding_candidates(
     query: str,
     runtime,
     *,
+    conversation_history: str = "",
     metric_infos: list[dict[str, Any]],
     retrieved_value_infos: list[Any],
     enum_aliases: dict[str, dict[str, str]],
@@ -65,7 +67,7 @@ async def extract_binding_candidates(
     parser = PydanticOutputParser(pydantic_object=BindingCandidates)
     prompt = PromptTemplate(
         template=load_prompt("binding_candidate_extractor"),
-        input_variables=["query"],
+        input_variables=["query", "conversation_history"],
         partial_variables={"format_instructions": parser.get_format_instructions()},
     )
     try:
@@ -73,7 +75,10 @@ async def extract_binding_candidates(
             prompt,
             llm,
             parser,
-            {"query": query},
+            {
+                "query": query,
+                "conversation_history": conversation_history or "无",
+            },
             "业务候选抽取",
             runtime.context["cost_tracker"],
             app_config.llm.timeout_seconds,

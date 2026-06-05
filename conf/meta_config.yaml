@@ -68,7 +68,7 @@ tables:
       - name: product_name
         role: dimension
         description: 商品名称。
-        alias: [商品名称, 产品名称]
+        alias: [商品, 商品名称, 产品名称]
         sync: true
 
       - name: category
@@ -164,6 +164,11 @@ tables:
         sync: false
 
 metrics:
+  - name: ORDER_COUNT
+    description: 订单数，使用订单唯一标识 order_id 去重计数。
+    relevant_columns:
+      - fact_order.order_id
+    alias: [订单, 订单数, 订单量, 订单笔数]
   - name: GMV
     description: 全称Gross Merchandise Value，表示所有订单的成交金额总和。
     relevant_columns:

@@ -1,9 +1,10 @@
 """SQL 生成节点。"""
 
 import yaml
-from langchain_core.output_parsers import StrOutputParser
+from langchain_core.output_parsers import PydanticOutputParser
 from langchain_core.prompts import PromptTemplate
 from langgraph.runtime import Runtime
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.agent.context import DataAgentContext
 from app.agent.llm import generate_sql_llm
@@ -12,6 +13,13 @@ from app.agent.state import DataAgentState
 from app.conf.app_config import app_config
 from app.core.log import logger
 from app.prompt.prompt_loader import load_prompt
+
+
+class GeneratedSqlResponse(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
+    sql: str = Field(default="")
+    explanation: str = Field(default="")
 
 
 async def generate_sql(state: DataAgentState, runtime: Runtime[DataAgentContext]):
@@ -27,6 +35,7 @@ async def generate_sql(state: DataAgentState, runtime: Runtime[DataAgentContext]
         business_binding = state.get("business_binding") or {
             "metrics": state.get("metric_bindings") or [],
             "filters": state.get("resolved_filters") or [],
+            "groups": state.get("groupby_bindings") or [],
             "time": state.get("time_binding"),
             "unresolved": state.get("unresolved_bindings") or [],
             "ambiguous": state.get("ambiguous_bindings") or [],
@@ -38,6 +47,7 @@ async def generate_sql(state: DataAgentState, runtime: Runtime[DataAgentContext]
         conversation_history = state.get("conversation_history") or "无"
         sql_memory_context = state.get("sql_memory_context") or "无"
 
+        parser = PydanticOutputParser(pydantic_object=GeneratedSqlResponse)
         prompt = PromptTemplate(
             template=load_prompt("generate_sql"),
             input_variables=[
@@ -50,13 +60,13 @@ async def generate_sql(state: DataAgentState, runtime: Runtime[DataAgentContext]
                 "db_info",
                 "query",
             ],
+            partial_variables={"format_instructions": parser.get_format_instructions()},
         )
-        output_parser = StrOutputParser()
 
         result = await ainvoke_llm_with_usage(
             prompt,
             generate_sql_llm,
-            output_parser,
+            parser,
             {
                 "table_infos": yaml.dump(
                     table_infos, allow_unicode=True, sort_keys=False
@@ -84,11 +94,21 @@ async def generate_sql(state: DataAgentState, runtime: Runtime[DataAgentContext]
             cacheable=False,
         )
 
-        logger.info(f"生成的SQL：{result}")
+        sql = result.sql.strip()
+        explanation = result.explanation.strip()
+        if explanation:
+            _write_answer_delta(writer, "\n\n" + explanation)
+        logger.info(f"生成的SQL：{sql}")
         writer({"type": "progress", "step": step, "status": "success"})
-        return {"sql": result}
+        return {"sql": sql, "sql_explanation": explanation}
 
     except Exception as e:
         logger.error(f"{step} failed: {e}")
         writer({"type": "progress", "step": step, "status": "error"})
         raise
+
+
+def _write_answer_delta(writer, text: str) -> None:
+    content = str(text or "")
+    for index in range(0, len(content), 12):
+        writer({"type": "answer_delta", "delta": content[index : index + 12]})

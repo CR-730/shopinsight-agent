@@ -5,7 +5,9 @@
 字段校验和 OpenAPI 文档生成交给 Pydantic 与 FastAPI 完成。
 """
 
-from pydantic import BaseModel
+from typing import Any
+
+from pydantic import BaseModel, Field
 
 
 class QuerySchema(BaseModel):
@@ -15,3 +17,22 @@ class QuerySchema(BaseModel):
     query: str
     conversation_id: str | None = None
     user_id: str | None = None
+
+
+class ConversationMessageSchema(BaseModel):
+    role: str
+    content: str
+    created_at: str
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class ConversationSummarySchema(BaseModel):
+    id: str
+    title: str
+    created_at: str
+    updated_at: str
+    messages: list[ConversationMessageSchema] = Field(default_factory=list)
+
+
+class ConversationListSchema(BaseModel):
+    conversations: list[ConversationSummarySchema]

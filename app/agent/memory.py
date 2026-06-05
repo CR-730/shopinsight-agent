@@ -7,7 +7,10 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
+from app.agent.cost import estimate_tokens
+
 SQL_TOOL_NAME = "run_sql"
+CONVERSATION_HISTORY_TOKEN_BUDGET = 1200
 
 
 class Message(BaseModel):
@@ -136,6 +139,38 @@ def format_conversation_history(messages: list[Message], limit: int = 8) -> str:
     )
 
 
+def sliding_conversation_history(
+    conversation_history: str,
+    *,
+    token_budget: int = CONVERSATION_HISTORY_TOKEN_BUDGET,
+) -> str:
+    """Keep full history until it exceeds budget, then drop oldest lines."""
+
+    lines = [line for line in conversation_history.splitlines() if line.strip()]
+    if estimate_tokens("\n".join(lines)) <= token_budget:
+        return "\n".join(lines)
+
+    selected: list[str] = []
+    used = 0
+    for line in reversed(lines):
+        line_tokens = estimate_tokens(line)
+        if selected and used + line_tokens > token_budget:
+            break
+        if not selected and line_tokens > token_budget:
+            selected.append(_trim_to_token_budget(line, token_budget))
+            break
+        selected.append(line)
+        used += line_tokens
+    return "\n".join(reversed(selected))
+
+
+def _trim_to_token_budget(text: str, token_budget: int) -> str:
+    max_chars = max(1, token_budget * 2)
+    if len(text) <= max_chars:
+        return text
+    return text[-max_chars:]
+
+
 def format_tool_memory_results(results: list[ToolMemorySearchResult]) -> str:
     if not results:
         return ""
@@ -166,8 +201,10 @@ def _trusted_business_binding(state: dict[str, Any]) -> dict[str, Any]:
         binding.setdefault("filters", state["resolved_filters"])
     if state.get("time_binding"):
         binding.setdefault("time", state["time_binding"])
+    if state.get("groupby_bindings"):
+        binding.setdefault("groups", state["groupby_bindings"])
     return {
         key: value
         for key, value in binding.items()
-        if key in {"metrics", "filters", "time"} and value
+        if key in {"metrics", "filters", "groups", "time"} and value
     }

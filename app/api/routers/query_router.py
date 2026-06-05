@@ -8,15 +8,46 @@
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException, Query
 from starlette.responses import StreamingResponse
 
 from app.api.dependencies import get_query_service
-from app.api.schemas.query_schema import QuerySchema
+from app.api.schemas.query_schema import (
+    ConversationListSchema,
+    ConversationMessageSchema,
+    ConversationSummarySchema,
+    QuerySchema,
+)
 from app.services.query_service import QueryService
 
 # 当前模块只维护查询相关接口，避免后续所有 API 都挤在 main.py 中
 query_router = APIRouter()
+
+
+def _conversation_summary(conversation) -> ConversationSummarySchema:
+    title = next(
+        (
+            message.content.strip()
+            for message in conversation.messages
+            if message.role == "user" and message.content.strip()
+        ),
+        conversation.id,
+    )
+    return ConversationSummarySchema(
+        id=conversation.id,
+        title=title,
+        created_at=conversation.created_at.isoformat(),
+        updated_at=conversation.updated_at.isoformat(),
+        messages=[
+            ConversationMessageSchema(
+                role=message.role,
+                content=message.content,
+                created_at=message.timestamp.isoformat(),
+                metadata=message.metadata,
+            )
+            for message in conversation.messages
+        ],
+    )
 
 
 @query_router.post("/api/query")
@@ -37,3 +68,48 @@ async def query_handler(
         ),
         media_type="text/event-stream",
     )
+
+
+@query_router.get("/api/conversations", response_model=ConversationListSchema)
+async def list_conversations_handler(
+    query_service: Annotated[QueryService, Depends(get_query_service)],
+    user_id: str = Query(default="anonymous"),
+    limit: int = Query(default=50, ge=1, le=100),
+):
+    conversations = await query_service.list_conversations(user_id=user_id, limit=limit)
+    return ConversationListSchema(
+        conversations=[_conversation_summary(item) for item in conversations]
+    )
+
+
+@query_router.get(
+    "/api/conversations/{conversation_id}",
+    response_model=ConversationSummarySchema,
+)
+async def get_conversation_handler(
+    conversation_id: str,
+    query_service: Annotated[QueryService, Depends(get_query_service)],
+    user_id: str = Query(default="anonymous"),
+):
+    conversation = await query_service.get_conversation(
+        conversation_id=conversation_id,
+        user_id=user_id,
+    )
+    if conversation is None:
+        raise HTTPException(status_code=404, detail="conversation not found")
+    return _conversation_summary(conversation)
+
+
+@query_router.delete("/api/conversations/{conversation_id}")
+async def delete_conversation_handler(
+    conversation_id: str,
+    query_service: Annotated[QueryService, Depends(get_query_service)],
+    user_id: str = Query(default="anonymous"),
+):
+    deleted = await query_service.delete_conversation(
+        conversation_id=conversation_id,
+        user_id=user_id,
+    )
+    if not deleted:
+        raise HTTPException(status_code=404, detail="conversation not found")
+    return {"ok": True}

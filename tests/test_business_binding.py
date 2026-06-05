@@ -53,6 +53,29 @@ def _region_table():
     ]
 
 
+def _customer_table():
+    return [
+        {
+            "name": "dim_customer",
+            "role": "dimension",
+            "columns": [
+                {
+                    "name": "customer_id",
+                    "role": "primary_key",
+                    "alias": ["客户ID"],
+                    "examples": [],
+                },
+                {
+                    "name": "member_level",
+                    "role": "dimension",
+                    "alias": ["会员等级", "用户等级"],
+                    "examples": ["普通", "黄金"],
+                },
+            ],
+        }
+    ]
+
+
 def test_metric_candidate_maps_sales_amount_to_gmv():
     bindings, issues = resolve_metric_candidates(
         BindingCandidates(
@@ -210,7 +233,103 @@ def test_groupby_candidate_is_not_enum_filter():
 
     assert binding["metrics"][0]["canonical_metric"] == "GMV"
     assert binding["filters"] == []
+    assert binding["groups"] == [
+        {
+            "raw_mention": "各大区",
+            "column": "dim_region.region_name",
+            "field_alias": "大区",
+            "matched_by": "column_alias",
+            "confidence": "high",
+        }
+    ]
     assert binding["unresolved"] == []
+
+
+def test_groupby_candidate_maps_member_level_to_dimension_column():
+    binding = asyncio.run(
+        validate_binding_candidates(
+            BindingCandidates(
+                metric_mentions=[MetricMention(raw_text="销售额", normalized_text="销售额")],
+                groupby_mentions=[GroupByMention(raw_text="会员等级", field_hint="会员等级")],
+            ),
+            _context(
+                metric_infos=[
+                    {
+                        "name": "GMV",
+                        "alias": ["销售额"],
+                        "relevant_columns": ["fact_order.order_amount"],
+                    }
+                ],
+                table_infos=_customer_table(),
+            ),
+        )
+    )
+
+    assert binding["groups"] == [
+        {
+            "raw_mention": "会员等级",
+            "column": "dim_customer.member_level",
+            "field_alias": "会员等级",
+            "matched_by": "column_alias",
+            "confidence": "high",
+        }
+    ]
+    assert binding["unresolved"] == []
+
+
+def test_business_binding_node_passes_sliding_history_to_candidate_extractor(monkeypatch):
+    class MetaRepository:
+        async def list_value_aliases(self):
+            return []
+
+    class Runtime:
+        stream_writer = staticmethod(lambda _: None)
+        context = {
+            "meta_mysql_repository": MetaRepository(),
+            "dw_mysql_repository": DWRepository(),
+            "cost_tracker": object(),
+        }
+
+    captured = {}
+
+    async def fake_extract_binding_candidates(query, runtime, **kwargs):
+        captured.update(kwargs)
+        return BindingCandidates(
+            metric_mentions=[MetricMention(raw_text="销售额", normalized_text="销售额")],
+            groupby_mentions=[GroupByMention(raw_text="会员等级", field_hint="会员等级")],
+        )
+
+    monkeypatch.setattr(
+        business_binding_module,
+        "extract_binding_candidates",
+        fake_extract_binding_candidates,
+    )
+
+    result = asyncio.run(
+        business_binding(
+            {
+                "query": "可以",
+                "conversation_history": (
+                    "user: 按会员等级看订单和销售额\n"
+                    "assistant: “订单”指标暂未配置，但“销售额”已成功绑定，"
+                    "您可以先查看按会员等级的销售额数据。"
+                ),
+                "metric_infos": [
+                    {
+                        "name": "GMV",
+                        "description": "Gross Merchandise Value",
+                        "alias": ["销售额"],
+                        "relevant_columns": ["fact_order.order_amount"],
+                    }
+                ],
+                "table_infos": _customer_table(),
+            },
+            Runtime(),
+        )
+    )
+
+    assert "按会员等级看订单和销售额" in captured["conversation_history"]
+    assert result["business_binding"]["groups"][0]["column"] == "dim_customer.member_level"
 
 
 def test_time_candidate_parses_quarter_to_date_range():
@@ -274,6 +393,36 @@ def test_mixed_known_and_unknown_metrics_keeps_unresolved_metric():
     ]
 
 
+def test_order_and_sales_amount_bind_to_order_count_and_gmv():
+    bindings, issues = resolve_metric_candidates(
+        BindingCandidates(
+            metric_mentions=[
+                MetricMention(raw_text="订单", normalized_text="订单"),
+                MetricMention(raw_text="销售额", normalized_text="销售额"),
+            ]
+        ),
+        [
+            {
+                "name": "ORDER_COUNT",
+                "description": "订单数量，使用订单ID计数。",
+                "alias": ["订单", "订单数", "订单量", "订单笔数"],
+                "relevant_columns": ["fact_order.order_id"],
+            },
+            {
+                "name": "GMV",
+                "alias": ["销售额"],
+                "relevant_columns": ["fact_order.order_amount"],
+            },
+        ],
+    )
+
+    assert issues == []
+    assert [binding["canonical_metric"] for binding in bindings] == [
+        "ORDER_COUNT",
+        "GMV",
+    ]
+
+
 def test_measure_column_mentions_do_not_become_unknown_metrics_when_metric_is_bound():
     binding = asyncio.run(
         validate_binding_candidates(
@@ -305,7 +454,7 @@ def test_measure_column_mentions_do_not_become_unknown_metrics_when_metric_is_bo
     assert binding["unresolved"] == []
 
 
-def test_extraction_failure_fails_closed_even_with_explicit_metric_fallback():
+def test_extraction_failure_does_not_block_explicit_metric_fallback():
     binding = asyncio.run(
         validate_binding_candidates(
             BindingCandidates(
@@ -317,14 +466,7 @@ def test_extraction_failure_fails_closed_even_with_explicit_metric_fallback():
     )
 
     assert binding["metrics"][0]["canonical_metric"] == "GMV"
-    assert binding["unresolved"] == [
-        {
-            "type": "candidate_extraction",
-            "raw_text": "",
-            "candidate_column": "",
-            "reason": "candidate_extraction_failed",
-        }
-    ]
+    assert binding["unresolved"] == []
 
 
 def test_filter_candidate_without_field_hint_is_unresolved_when_not_bound():

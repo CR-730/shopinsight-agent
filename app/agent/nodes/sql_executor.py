@@ -69,15 +69,20 @@ async def _pre_validate_sql(state: dict, executor: SqlExecutor) -> dict:
 
 
 async def _execute_sql(state: dict, executor: SqlExecutor, writer) -> dict:
+    writer({"type": "progress", "step": "执行查询", "status": "running"})
     result = await executor.execute(SqlExecutionRequest(sql=state["sql"]))
     if not result.ok:
+        writer({"type": "progress", "step": "执行查询", "status": "error"})
         return {
             "error": result.error or "SQL 执行失败",
             "exception_stage": result.audit.get("exception_stage"),
             "blocked_by": None,
         }
-    writer({"type": "result", "data": result.result})
-    return {"final_answer": result.result}
+
+    meta = _result_meta(state)
+    writer({"type": "progress", "step": "执行查询", "status": "success"})
+    writer({"type": "result", "data": result.result, "meta": meta})
+    return {"final_answer": result.result, "result_meta": meta}
 
 
 def _fail_sql_correction(state: dict) -> dict:
@@ -85,3 +90,12 @@ def _fail_sql_correction(state: dict) -> dict:
         "error": state.get("safety_error") or state.get("error") or "SQL 校验失败",
         "blocked_by": "sql_correction",
     }
+
+
+def _result_meta(state: dict) -> dict:
+    tables = []
+    for table in state.get("table_infos") or []:
+        name = str(table.get("name") or "").strip()
+        if name and name not in tables:
+            tables.append(name)
+    return {"tables": tables[:5]}

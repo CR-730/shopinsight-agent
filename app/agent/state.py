@@ -82,6 +82,16 @@ class ResolvedFilterState(TypedDict):
     allowed_sql_literals: list[str]
 
 
+class GroupByBindingState(TypedDict):
+    """Canonical grouping dimension resolved from user language."""
+
+    raw_mention: str
+    column: str
+    field_alias: str
+    matched_by: str
+    confidence: str
+
+
 class TimeBindingState(TypedDict, total=False):
     """Structured time constraint resolved from user language."""
 
@@ -112,6 +122,7 @@ class BusinessBindingState(TypedDict):
 
     metrics: list[MetricBindingState]
     filters: list[ResolvedFilterState]
+    groups: list[GroupByBindingState]
     time: TimeBindingState | None
     unresolved: list[BindingIssueState]
     ambiguous: list[BindingIssueState]
@@ -123,6 +134,7 @@ class DataAgentState(TypedDict):
     query: str  # 用户输入的查询
     conversation_history: NotRequired[str]
     sql_memory_context: NotRequired[str]
+    binding_candidates: NotRequired[dict]
     keywords: list[str]  # 抽取的关键词
     retrieved_column_infos: list[ColumnInfo]  # 检索到的字段信息
     retrieved_metric_infos: list[MetricInfo]  # 检索到的指标信息
@@ -136,16 +148,19 @@ class DataAgentState(TypedDict):
     business_binding: BusinessBindingState
     metric_bindings: list[MetricBindingState]
     resolved_filters: list[ResolvedFilterState]
+    groupby_bindings: list[GroupByBindingState]
     time_binding: TimeBindingState | None
     validated_enum_values: list[str]
     unresolved_bindings: list[BindingIssueState]
     ambiguous_bindings: list[BindingIssueState]
 
     sql: str  # 生成或校正后的SQL
+    sql_explanation: NotRequired[str]
     final_answer: list[dict]  # SQL 执行结果，用于评测 trace 和最终返回
 
     error: str  # 校验SQL时出现的错误信息
     safety_error: str  # SQL 执行前安全/语义闸门错误信息
+    user_facing_message: NotRequired[str]
     blocked_by: str  # 拦截请求的闸门节点名称
     correction_attempts: int  # SQL 已修正次数
     max_correction_attempts: int  # 单次查询允许的 SQL 最大修正次数

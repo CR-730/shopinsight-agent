@@ -393,6 +393,7 @@ def _looks_like_temporal_literal(literal: str) -> bool:
         or re.fullmatch(r"\d{8}", literal)
         or re.fullmatch(r"\d{4}", literal)
         or re.fullmatch(r"q[1-4]", literal.lower())
+        or re.fullmatch(r"(?:%[a-zA-Z][\-/:\s]*)+", literal)
     )
 
 

@@ -10,6 +10,7 @@ from app.agent.business_binding.time_resolver import resolve_time_mentions
 from app.agent.state import (
     BindingIssueState,
     BusinessBindingState,
+    GroupByBindingState,
     MetricBindingState,
     ResolvedFilterState,
 )
@@ -32,17 +33,20 @@ async def validate_binding_candidates(
         candidates, context.metric_infos, context.table_infos
     )
     filters, filter_issues = await resolve_filter_candidates(candidates, context)
+    groups, group_issues = resolve_groupby_candidates(candidates, context.table_infos)
     time_binding = resolve_time_mentions(
         [item.raw_text for item in candidates.time_mentions] + [candidates.source_query]
     )
     unresolved = [
         *metric_issues,
         *filter_issues,
+        *group_issues,
         *_extraction_issues(candidates),
     ]
     return {
         "metrics": metrics,
         "filters": filters,
+        "groups": groups,
         "time": time_binding,
         "unresolved": unresolved,
         "ambiguous": [],
@@ -130,6 +134,52 @@ async def resolve_filter_candidates(
     return filters, issues
 
 
+def resolve_groupby_candidates(
+    candidates: BindingCandidates,
+    table_infos: list[dict[str, Any]],
+) -> tuple[list[GroupByBindingState], list[BindingIssueState]]:
+    groups: list[GroupByBindingState] = []
+    issues: list[BindingIssueState] = []
+    columns_by_hint = _columns_by_hint(table_infos)
+    bound_columns: set[str] = set()
+
+    for mention in candidates.groupby_mentions:
+        raw_text = str(mention.raw_text or "").strip()
+        field_hint = str(mention.field_hint or "").strip()
+        lookup_values = [field_hint, raw_text]
+        column = ""
+        matched_alias = ""
+        for lookup in lookup_values:
+            normalized = _normalize_groupby_hint(lookup, columns_by_hint)
+            if normalized and normalized in columns_by_hint:
+                column = columns_by_hint[normalized][0]
+                matched_alias = normalized
+                break
+        if column:
+            if column not in bound_columns:
+                bound_columns.add(column)
+                groups.append(
+                    {
+                        "raw_mention": raw_text or field_hint,
+                        "column": column,
+                        "field_alias": matched_alias,
+                        "matched_by": "column_alias",
+                        "confidence": "high",
+                    }
+                )
+            continue
+        if raw_text or field_hint:
+            issues.append(
+                {
+                    "type": "groupby",
+                    "raw_text": raw_text or field_hint,
+                    "candidate_column": "",
+                    "reason": "groupby_not_bound",
+                }
+            )
+    return groups, issues
+
+
 async def _resolve_single_filter(
     raw_value: str,
     field_hint: str,
@@ -181,16 +231,9 @@ def validated_enum_values(filters: list[ResolvedFilterState]) -> list[str]:
 
 
 def _extraction_issues(candidates: BindingCandidates) -> list[BindingIssueState]:
-    if not candidates.extraction_failed:
-        return []
-    return [
-        {
-            "type": "candidate_extraction",
-            "raw_text": "",
-            "candidate_column": "",
-            "reason": "candidate_extraction_failed",
-        }
-    ]
+    # Candidate extraction failure is an observability signal, not a business blocker.
+    # Retrieval context and SQL generation can still answer from metric/table evidence.
+    return []
 
 
 def _metric_catalog(metric_infos: list[dict[str, Any]]):
@@ -281,6 +324,26 @@ def _filter_value_variants(
         if raw_value.endswith(suffix) and len(raw_value) > len(suffix):
             variants.append(raw_value[: -len(suffix)].rstrip("的 "))
     return list(dict.fromkeys(item for item in variants if item))
+
+
+def _normalize_groupby_hint(
+    value: str, columns_by_hint: dict[str, list[str]]
+) -> str:
+    normalized = str(value or "").strip()
+    for prefix in ("各", "每个", "每一", "按照", "按"):
+        if normalized.startswith(prefix) and len(normalized) > len(prefix):
+            normalized = normalized[len(prefix) :]
+            break
+    for suffix in ("分组维度", "维度", "分组"):
+        if normalized.endswith(suffix) and len(normalized) > len(suffix):
+            normalized = normalized[: -len(suffix)]
+            break
+    if normalized in columns_by_hint:
+        return normalized
+    for alias in sorted(columns_by_hint, key=len, reverse=True):
+        if alias and alias in normalized:
+            return alias
+    return normalized
 
 
 def _filter_issue(

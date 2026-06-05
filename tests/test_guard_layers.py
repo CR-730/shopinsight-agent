@@ -289,6 +289,17 @@ def test_pre_sql_execution_validation_allows_date_literals():
     assert error is None
 
 
+def test_pre_sql_execution_validation_allows_mysql_date_format_literals():
+    sql = (
+        "SELECT SUM(order_amount) AS GMV FROM fact_order "
+        "WHERE QUARTER(STR_TO_DATE(CAST(date_id AS CHAR), '%Y%m%d')) = 1"
+    )
+
+    error = validate_sql_before_execution({"query": "一季度 GMV"}, sql)
+
+    assert error is None
+
+
 def test_pre_sql_execution_validation_normalizes_fullwidth_comma():
     sql = "SELECT region_name AS 大区，SUM(order_amount) AS GMV FROM fact_order"
 

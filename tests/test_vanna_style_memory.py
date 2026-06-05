@@ -355,8 +355,55 @@ def test_assistant_message_stores_summary_not_result_json():
         }
     )
 
-    assert content == "查询成功，返回 2 行，字段：customer_phone, order_amount"
+    assert content == "查询完成，共返回 2 行结果，字段：customer_phone, order_amount。"
     assert "13800000000" not in content
+
+
+def test_assistant_message_uses_generic_error_without_llm_message():
+    content = _assistant_message(
+        {
+            "safety_error": "business_binding unresolved: metric=订单, reason=metric_not_bound",
+            "blocked_by": "business_binding",
+        }
+    )
+
+    assert content == "出了点问题，请稍后重试。"
+    assert "business_binding" not in content
+    assert "metric_not_bound" not in content
+
+
+def test_assistant_message_prefers_llm_user_facing_message():
+    content = _assistant_message(
+        {
+            "safety_error": "business_binding unresolved: metric=订单, reason=metric_not_bound",
+            "user_facing_message": "订单数这个指标还没配置；销售额可以先查。你可以直接回复先查销售额。",
+        }
+    )
+
+    assert content == "订单数这个指标还没配置；销售额可以先查。你可以直接回复先查销售额。"
+
+
+def test_assistant_message_does_not_generate_rule_copy_from_bound_metrics():
+    content = _assistant_message(
+        {
+            "safety_error": "business_binding unresolved: metric=订单, reason=metric_not_bound",
+            "blocked_by": "business_binding",
+            "metric_bindings": [
+                {
+                    "raw_mention": "销售额",
+                    "canonical_metric": "GMV",
+                    "matched_by": "metric_alias",
+                    "evidence": "GMV.alias contains 销售额",
+                    "relevant_columns": ["fact_order.order_amount"],
+                    "confidence": "high",
+                }
+            ],
+        }
+    )
+
+    assert content == "出了点问题，请稍后重试。"
+    assert "business_binding" not in content
+    assert "metric_not_bound" not in content
 
 
 def test_anonymous_user_does_not_write_long_term_sql_memory():
@@ -393,5 +440,8 @@ def test_anonymous_user_does_not_write_long_term_sql_memory():
             "user",
             "assistant",
         ]
+        assistant_message = conversation.messages[-1]
+        assert assistant_message.metadata["result"] == [{"GMV": 1}]
+        assert assistant_message.metadata["sql"] == "select 1 as GMV"
 
     asyncio.run(run())

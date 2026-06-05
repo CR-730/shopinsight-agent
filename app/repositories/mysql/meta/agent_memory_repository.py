@@ -143,6 +143,20 @@ class AgentMemoryRepository:
                 conversations.append(conversation)
         return conversations
 
+    async def delete_conversation(self, conversation_id: str, user_id: str) -> bool:
+        await self._ensure_tables()
+        result = await self.session.execute(
+            text(
+                """
+                delete from conversation
+                where id = :conversation_id and user_id = :user_id
+                """
+            ),
+            {"conversation_id": conversation_id, "user_id": user_id},
+        )
+        await self.session.commit()
+        return bool(result.rowcount)
+
     async def save_tool_usage(
         self,
         question: str,

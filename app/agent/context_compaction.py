@@ -50,12 +50,19 @@ async def filter_table_context(
     )
 
     filtered_table_infos: list[TableInfoState] = []
+    protected_columns = _protected_binding_columns(state.get("business_binding") or {})
     for table_info in table_infos:
-        if table_info["name"] in result:
+        selected_columns = set(result.get(table_info["name"]) or [])
+        selected_columns.update(
+            column_id.partition(".")[2]
+            for column_id in protected_columns
+            if column_id.startswith(f"{table_info['name']}.")
+        )
+        if selected_columns:
             table_info["columns"] = [
                 column_info
                 for column_info in table_info["columns"]
-                if column_info["name"] in result[table_info["name"]]
+                if column_info["name"] in selected_columns
             ]
             filtered_table_infos.append(table_info)
 
@@ -124,3 +131,20 @@ def _compact_column(column_info: dict) -> dict:
         "role": column_info.get("role", ""),
         "alias": column_info.get("alias") or [],
     }
+
+
+def _protected_binding_columns(business_binding: dict) -> set[str]:
+    columns: set[str] = set()
+    for group in business_binding.get("groups") or []:
+        column = str(group.get("column") or "").strip()
+        if column:
+            columns.add(column)
+    for metric in business_binding.get("metrics") or []:
+        columns.update(str(item) for item in metric.get("relevant_columns") or [] if item)
+    for item in business_binding.get("filters") or []:
+        column = str(item.get("column") or "").strip()
+        if column:
+            columns.add(column)
+    time_binding = business_binding.get("time") or {}
+    columns.update(str(item) for item in time_binding.get("required_columns") or [] if item)
+    return columns
