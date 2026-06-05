@@ -1,10 +1,12 @@
 import type {
+  AgentEvent,
   ChatMessage,
   ConversationSummary,
   MessagePart,
   ProgressEvent,
   StepState,
 } from "../types/agent";
+import { summarizeResult } from "./format";
 
 export function makeId() {
   return crypto.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(16).slice(2)}`;
@@ -89,6 +91,68 @@ export function messagesFromConversation(conversation: ConversationSummary): Cha
 
 export function titleForConversation(conversation: ConversationSummary) {
   return conversation.title?.trim() || "新会话";
+}
+
+export function applyAgentEventToAssistant(
+  message: ChatMessage,
+  event: AgentEvent,
+  fallbackErrorMessage: string,
+): ChatMessage {
+  if (event.type === "conversation") {
+    return { ...message, conversationId: event.data.conversation_id };
+  }
+
+  if (event.type === "progress") {
+    return {
+      ...message,
+      steps: upsertStep(message.steps, event),
+      parts: appendStatusPart(message.parts, event),
+    };
+  }
+
+  if (event.type === "result") {
+    return {
+      ...message,
+      result: event.data,
+      resultMeta: event.meta,
+      steps: upsertStep(message.steps, {
+        type: "progress",
+        step: "返回结果",
+        status: "success",
+      }),
+    };
+  }
+
+  if (event.type === "answer_delta") {
+    return {
+      ...message,
+      content: message.content + event.delta,
+      parts: appendTextPart(message.parts, event.delta),
+    };
+  }
+
+  if (event.type === "answer_done") {
+    return finishAssistantMessage(message);
+  }
+
+  if (event.type === "usage") {
+    return { ...message, usage: event.data };
+  }
+
+  return {
+    ...message,
+    status: "error",
+    content: message.content,
+    error: event.message || fallbackErrorMessage,
+  };
+}
+
+export function finishAssistantMessage(message: ChatMessage): ChatMessage {
+  return {
+    ...message,
+    status: "done",
+    content: message.content || summarizeResult(message.result),
+  };
 }
 
 function stageLabel(step: string) {

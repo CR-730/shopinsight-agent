@@ -17,14 +17,13 @@ import {
   streamQuery,
 } from "./lib/agentApi";
 import {
-  appendStatusPart,
-  appendTextPart,
+  applyAgentEventToAssistant,
+  finishAssistantMessage,
   makeId,
   messagesFromConversation,
   titleForConversation,
-  upsertStep,
 } from "./lib/chatMessages";
-import { cn, formatDateTime, summarizeResult } from "./lib/format";
+import { cn, formatDateTime } from "./lib/format";
 import type { AgentEvent, ChatMessage, ConversationSummary } from "./types/agent";
 
 const examples = [
@@ -156,58 +155,7 @@ export default function App() {
       setMessages((current) =>
         current.map((message) => {
           if (message.id !== assistantId) return message;
-
-          if (event.type === "conversation") {
-            return { ...message, conversationId: event.data.conversation_id };
-          }
-
-          if (event.type === "progress") {
-            return {
-              ...message,
-              steps: upsertStep(message.steps, event),
-              parts: appendStatusPart(message.parts, event),
-            };
-          }
-
-          if (event.type === "result") {
-            return {
-              ...message,
-              result: event.data,
-              resultMeta: event.meta,
-              steps: upsertStep(message.steps, {
-                type: "progress",
-                step: "返回结果",
-                status: "success",
-              }),
-            };
-          }
-
-          if (event.type === "answer_delta") {
-            return {
-              ...message,
-              content: message.content + event.delta,
-              parts: appendTextPart(message.parts, event.delta),
-            };
-          }
-
-          if (event.type === "answer_done") {
-            return {
-              ...message,
-              status: "done",
-              content: message.content || summarizeResult(message.result),
-            };
-          }
-
-          if (event.type === "usage") {
-            return { ...message, usage: event.data };
-          }
-
-          return {
-            ...message,
-            status: "error",
-            content: message.content,
-            error: event.message || ASSISTANT_ERROR_MESSAGE,
-          };
+          return applyAgentEventToAssistant(message, event, ASSISTANT_ERROR_MESSAGE);
         }),
       );
     };
@@ -217,11 +165,7 @@ export default function App() {
       setMessages((current) =>
         current.map((message) =>
           message.id === assistantId && message.status === "streaming"
-            ? {
-                ...message,
-                status: "done",
-                content: message.content || summarizeResult(message.result),
-              }
+            ? finishAssistantMessage(message)
             : message,
         ),
       );
