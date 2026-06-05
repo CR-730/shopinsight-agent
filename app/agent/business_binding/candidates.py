@@ -48,7 +48,6 @@ class BindingCandidates(BaseModel):
 
     source_query: str = Field(default="")
     user_response: str = Field(default="")
-    extraction_failed: bool = Field(default=False)
     metric_mentions: list[MetricMention] = Field(default_factory=list)
     filter_mentions: list[FilterMention] = Field(default_factory=list)
     time_mentions: list[TimeMention] = Field(default_factory=list)
@@ -112,7 +111,6 @@ def fallback_binding_candidates(
     ]
     return BindingCandidates(
         source_query=query,
-        extraction_failed=True,
         metric_mentions=metrics,
         filter_mentions=filters,
     )

@@ -41,7 +41,6 @@ async def validate_binding_candidates(
         *metric_issues,
         *filter_issues,
         *group_issues,
-        *_extraction_issues(candidates),
     ]
     return {
         "metrics": metrics,
@@ -228,12 +227,6 @@ def validate_business_binding_state(state: dict[str, Any]) -> str | None:
 
 def validated_enum_values(filters: list[ResolvedFilterState]) -> list[str]:
     return [literal for item in filters for literal in item["allowed_sql_literals"]]
-
-
-def _extraction_issues(candidates: BindingCandidates) -> list[BindingIssueState]:
-    # Candidate extraction failure is an observability signal, not a business blocker.
-    # Retrieval context and SQL generation can still answer from metric/table evidence.
-    return []
 
 
 def _metric_catalog(metric_infos: list[dict[str, Any]]):

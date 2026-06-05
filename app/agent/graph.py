@@ -85,8 +85,6 @@ graph_builder.add_edge("sql_executor", END)
 # 编译后的 graph 是对外使用的 Agent 执行入口
 graph = graph_builder.compile()
 
-# print(graph.get_graph().draw_mermaid())
-
 if __name__ == "__main__":
 
     async def test():

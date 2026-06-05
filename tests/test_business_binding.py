@@ -454,21 +454,6 @@ def test_measure_column_mentions_do_not_become_unknown_metrics_when_metric_is_bo
     assert binding["unresolved"] == []
 
 
-def test_extraction_failure_does_not_block_explicit_metric_fallback():
-    binding = asyncio.run(
-        validate_binding_candidates(
-            BindingCandidates(
-                metric_mentions=[MetricMention(raw_text="销售额", normalized_text="销售额")],
-                extraction_failed=True,
-            ),
-            _context(metric_infos=[{"name": "GMV", "alias": ["销售额"]}]),
-        )
-    )
-
-    assert binding["metrics"][0]["canonical_metric"] == "GMV"
-    assert binding["unresolved"] == []
-
-
 def test_filter_candidate_without_field_hint_is_unresolved_when_not_bound():
     binding = asyncio.run(
         validate_binding_candidates(

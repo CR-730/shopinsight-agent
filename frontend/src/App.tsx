@@ -16,15 +16,16 @@ import {
   listConversations,
   streamQuery,
 } from "./lib/agentApi";
+import {
+  appendStatusPart,
+  appendTextPart,
+  makeId,
+  messagesFromConversation,
+  titleForConversation,
+  upsertStep,
+} from "./lib/chatMessages";
 import { cn, formatDateTime, summarizeResult } from "./lib/format";
-import type {
-  AgentEvent,
-  ChatMessage,
-  ConversationSummary,
-  MessagePart,
-  ProgressEvent,
-  StepState,
-} from "./types/agent";
+import type { AgentEvent, ChatMessage, ConversationSummary } from "./types/agent";
 
 const examples = [
   "一季度各大区 GMV 排名",
@@ -34,112 +35,6 @@ const examples = [
 ];
 
 const ASSISTANT_ERROR_MESSAGE = "出了点问题，请稍后重试。";
-
-function makeId() {
-  return crypto.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(16).slice(2)}`;
-}
-
-function stageLabel(step: string) {
-  const normalized = step.toLowerCase();
-  if (/guard|安全|意图|理解|问题|rag/.test(normalized)) return "理解问题";
-  if (/context|召回|检索|过滤|字段|指标|绑定|business/.test(normalized)) return "检索上下文";
-  if (/generate|生成/.test(normalized)) return "生成查询";
-  if (/result|返回|结果/.test(normalized)) return "返回结果";
-  if (/sql|执行|校验|executor|validate/.test(normalized)) return "执行查询";
-  return "检索上下文";
-}
-
-function upsertStep(steps: StepState[] = [], event: ProgressEvent) {
-  const next = steps.filter((item) => item.step !== event.step);
-  next.push({
-    step: event.step,
-    label: stageLabel(event.step),
-    status: event.status,
-    updatedAt: Date.now(),
-  });
-  return next;
-}
-
-function displayStatusLabel(label: string) {
-  if (label === "理解问题") return "正在思考";
-  if (label === "检索上下文" || label === "生成查询") return "召回元数据并生成 SQL";
-  if (label === "执行查询" || label === "返回结果") return "执行 SQL 并返回结果";
-  return label;
-}
-
-function appendStatusPart(parts: MessagePart[] = [], event: ProgressEvent): MessagePart[] {
-  if (event.status !== "running") return parts;
-  const label = displayStatusLabel(stageLabel(event.step));
-  const statusParts = parts.filter((part) => part.type === "status");
-  if (statusParts.some((part) => part.label === label)) return parts;
-  const lastStatus = statusParts[statusParts.length - 1];
-  if (lastStatus && statusRank(label) <= statusRank(lastStatus.label)) return parts;
-  return [
-    ...settleStatusParts(parts),
-    {
-      id: makeId(),
-      type: "status",
-      label,
-      status: event.status,
-    },
-  ];
-}
-
-function statusRank(label: string) {
-  if (label === "正在思考") return 0;
-  if (label === "召回元数据并生成 SQL") return 1;
-  if (label === "执行 SQL 并返回结果") return 2;
-  return 1;
-}
-
-function appendTextPart(parts: MessagePart[] = [], delta: string): MessagePart[] {
-  const settledParts = settleStatusParts(parts);
-  const last = settledParts[settledParts.length - 1];
-  if (last?.type === "text") {
-    return [
-      ...settledParts.slice(0, -1),
-      {
-        ...last,
-        content: last.content + delta,
-      },
-    ];
-  }
-  return [
-    ...settledParts,
-    {
-      id: makeId(),
-      type: "text",
-      content: delta,
-    },
-  ];
-}
-
-function settleStatusParts(parts: MessagePart[] = []): MessagePart[] {
-  return parts.map((part) =>
-    part.type === "status" && part.status === "running"
-      ? { ...part, status: "success" }
-      : part,
-  );
-}
-
-function messagesFromConversation(conversation: ConversationSummary): ChatMessage[] {
-  return conversation.messages
-    .filter((message) => message.role === "user" || message.role === "assistant")
-    .map((message) => ({
-      id: makeId(),
-      role: message.role === "user" ? "user" : "assistant",
-      content: message.content,
-      createdAt: new Date(message.created_at).getTime(),
-      status: "done",
-      conversationId: conversation.id,
-      result: message.metadata?.result,
-      resultMeta: message.metadata?.result_meta,
-    }));
-}
-
-function titleForConversation(conversation: ConversationSummary) {
-  return conversation.title?.trim() || "新会话";
-}
 
 export default function App() {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
