@@ -1,8 +1,4 @@
-/**
- * 智能体类型定义
- * 定义问数智能体前端使用的 SSE 事件、流程步骤和聊天消息类型
- */
-export type ProgressStatus = "running" | "success" | "error";
+export type ProgressStatus = "running" | "success" | "error" | "blocked";
 
 export type ProgressEvent = {
   type: "progress";
@@ -13,6 +9,7 @@ export type ProgressEvent = {
 export type ResultEvent = {
   type: "result";
   data: unknown;
+  meta?: ResultMeta;
 };
 
 export type ErrorEvent = {
@@ -38,6 +35,15 @@ export type UsageEvent = {
   data: UsageSummary;
 };
 
+export type AnswerDeltaEvent = {
+  type: "answer_delta";
+  delta: string;
+};
+
+export type AnswerDoneEvent = {
+  type: "answer_done";
+};
+
 export type ConversationEvent = {
   type: "conversation";
   data: {
@@ -51,13 +57,29 @@ export type AgentEvent =
   | ResultEvent
   | ErrorEvent
   | UsageEvent
+  | AnswerDeltaEvent
+  | AnswerDoneEvent
   | ConversationEvent;
 
 export type StepState = {
   step: string;
+  label: string;
   status: ProgressStatus;
   updatedAt: number;
 };
+
+export type MessagePart =
+  | {
+      id: string;
+      type: "status";
+      label: string;
+      status: ProgressStatus;
+    }
+  | {
+      id: string;
+      type: "text";
+      content: string;
+    };
 
 export type ChatMessage = {
   id: string;
@@ -66,8 +88,34 @@ export type ChatMessage = {
   createdAt: number;
   status?: "streaming" | "done" | "error";
   steps?: StepState[];
+  parts?: MessagePart[];
   result?: unknown;
+  resultMeta?: ResultMeta;
   error?: string;
   usage?: UsageSummary;
   conversationId?: string;
+};
+
+export type ResultMeta = {
+  tables?: string[];
+};
+
+export type ConversationMessage = {
+  role: "user" | "assistant" | string;
+  content: string;
+  created_at: string;
+  metadata?: {
+    result?: unknown;
+    result_meta?: ResultMeta;
+    sql?: string;
+    [key: string]: unknown;
+  };
+};
+
+export type ConversationSummary = {
+  id: string;
+  title: string;
+  created_at: string;
+  updated_at: string;
+  messages: ConversationMessage[];
 };

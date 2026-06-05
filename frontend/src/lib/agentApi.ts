@@ -1,8 +1,4 @@
-/**
- * 智能体接口客户端
- * 封装后端 /api/query SSE 流式接口请求与事件解析逻辑
- */
-import type { AgentEvent } from "../types/agent";
+import type { AgentEvent, ConversationSummary } from "../types/agent";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL?.replace(/\/$/, "") ?? "";
 const USER_ID_KEY = "shopkeeper-agent-user-id";
@@ -12,6 +8,53 @@ type QueryOptions = {
   conversationId?: string | null;
   onEvent: (event: AgentEvent) => void;
 };
+
+export function getUserId() {
+  const existing = localStorage.getItem(USER_ID_KEY);
+  if (existing) return existing;
+
+  const userId = crypto.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  localStorage.setItem(USER_ID_KEY, userId);
+  return userId;
+}
+
+export async function listConversations(signal?: AbortSignal) {
+  const url = new URL(`${API_BASE_URL || window.location.origin}/api/conversations`);
+  url.searchParams.set("user_id", getUserId());
+
+  const response = await fetch(toRequestUrl(url), { signal });
+  if (!response.ok) {
+    throw new Error(`加载历史会话失败：HTTP ${response.status}`);
+  }
+
+  const payload = (await response.json()) as { conversations: ConversationSummary[] };
+  return payload.conversations ?? [];
+}
+
+export async function getConversation(conversationId: string, signal?: AbortSignal) {
+  const url = new URL(`${API_BASE_URL || window.location.origin}/api/conversations/${conversationId}`);
+  url.searchParams.set("user_id", getUserId());
+
+  const response = await fetch(toRequestUrl(url), { signal });
+  if (!response.ok) {
+    throw new Error(`加载会话失败：HTTP ${response.status}`);
+  }
+
+  return (await response.json()) as ConversationSummary;
+}
+
+export async function deleteConversation(conversationId: string, signal?: AbortSignal) {
+  const url = new URL(`${API_BASE_URL || window.location.origin}/api/conversations/${conversationId}`);
+  url.searchParams.set("user_id", getUserId());
+
+  const response = await fetch(toRequestUrl(url), {
+    method: "DELETE",
+    signal,
+  });
+  if (!response.ok) {
+    throw new Error(`删除会话失败：HTTP ${response.status}`);
+  }
+}
 
 export async function streamQuery(query: string, options: QueryOptions) {
   const response = await fetch(`${API_BASE_URL}/api/query`, {
@@ -33,7 +76,7 @@ export async function streamQuery(query: string, options: QueryOptions) {
   }
 
   if (!response.body) {
-    throw new Error("浏览器未返回可读取的流式响应。");
+    throw new Error("浏览器没有返回可读取的流式响应。");
   }
 
   const reader = response.body.getReader();
@@ -50,25 +93,13 @@ export async function streamQuery(query: string, options: QueryOptions) {
 
     for (const chunk of chunks) {
       const event = parseSseChunk(chunk);
-      if (event) {
-        options.onEvent(event);
-      }
+      if (event) options.onEvent(event);
     }
   }
 
   buffer += decoder.decode();
   const tail = parseSseChunk(buffer);
-  if (tail) {
-    options.onEvent(tail);
-  }
-}
-
-function getUserId() {
-  const existing = localStorage.getItem(USER_ID_KEY);
-  if (existing) return existing;
-  const userId = crypto.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(16).slice(2)}`;
-  localStorage.setItem(USER_ID_KEY, userId);
-  return userId;
+  if (tail) options.onEvent(tail);
 }
 
 function parseSseChunk(chunk: string): AgentEvent | null {
@@ -86,7 +117,12 @@ function parseSseChunk(chunk: string): AgentEvent | null {
   } catch {
     return {
       type: "error",
-      message: `无法解析后端事件：${payload}`,
+      message: "出了点问题，请稍后重试。",
     };
   }
+}
+
+function toRequestUrl(url: URL) {
+  if (API_BASE_URL) return url.toString();
+  return `${url.pathname}${url.search}`;
 }

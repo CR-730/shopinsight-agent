@@ -1,7 +1,3 @@
-/**
- * 通用格式化工具
- * 提供 className 合并、时间格式化和查询结果文本化等通用工具函数
- */
 export function cn(...classes: Array<string | false | null | undefined>) {
   return classes.filter(Boolean).join(" ");
 }
@@ -11,6 +7,15 @@ export function formatTime(timestamp: number) {
     hour: "2-digit",
     minute: "2-digit",
   }).format(timestamp);
+}
+
+export function formatDateTime(value: string | number | Date) {
+  return new Intl.DateTimeFormat("zh-CN", {
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(new Date(value));
 }
 
 export function summarizeResult(data: unknown) {

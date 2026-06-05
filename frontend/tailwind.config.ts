@@ -1,7 +1,3 @@
-/**
- * Tailwind CSS 主题配置
- * 定义前端项目的字体、颜色和阴影扩展
- */
 import type { Config } from "tailwindcss";
 
 export default {
@@ -10,26 +6,26 @@ export default {
     extend: {
       fontFamily: {
         sans: [
-          '"LXGW WenKai Screen"',
+          '"Sohne"',
+          '"Inter"',
           '"Noto Sans SC"',
           '"PingFang SC"',
           '"Microsoft YaHei"',
           "sans-serif",
         ],
-        mono: ['"JetBrains Mono"', '"SFMono-Regular"', "Consolas", "monospace"],
+        mono: ['"SFMono-Regular"', "Consolas", '"Liberation Mono"', "monospace"],
       },
       colors: {
-        parchment: "#f7f1e8",
-        ink: "#20201d",
-        soot: "#2d2925",
-        moss: "#2f6b4f",
-        brass: "#b48638",
-        tomato: "#d64e3a",
-        mist: "#d8ddd2",
-      },
-      boxShadow: {
-        line: "0 1px 0 rgba(32, 32, 29, 0.08)",
-        panel: "0 24px 70px rgba(45, 41, 37, 0.16)",
+        chatgpt: {
+          green: "#10a37f",
+          text: "#202123",
+          muted: "#565869",
+          subtle: "#8e8ea0",
+          sidebar: "#f9f9f9",
+          surface: "#ffffff",
+          bubble: "#f4f4f4",
+          border: "#ececec",
+        },
       },
     },
   },
