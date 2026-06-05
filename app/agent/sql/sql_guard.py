@@ -9,10 +9,6 @@ from sqlglot.errors import ParseError
 
 from app.conf.policy_config import load_policy_config
 
-AGGREGATE_PATTERN = re.compile(r"\b(sum|count|avg|min|max)\s*\(", re.IGNORECASE)
-ALIAS_PATTERN = re.compile(r"\bas\s+`?([\w\u4e00-\u9fff]+)`?", re.IGNORECASE)
-STRING_LITERAL_PATTERN = re.compile(r"'([^']+)'")
-
 
 def normalize_sql_for_execution(sql: str) -> str:
     normalized = sql.strip()
