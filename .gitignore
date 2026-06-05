@@ -54,6 +54,7 @@ testem.log
 /typings
 /logs/
 /eval/runs/
+/.codex-references/
 
 # System
 .DS_Store
