@@ -107,9 +107,9 @@ class InMemoryConversationStore:
 
 
 def build_sql_tool_memory(question: str, state: dict[str, Any]) -> ToolMemory | None:
-    # Long-term SQL memory stores only successful, fully validated examples.
-    # Raw conversation text and partial bindings stay out of the reusable tool
-    # memory so future SQL generation cannot inherit a failed or ambiguous turn.
+    # 长期 SQL 记忆只保存成功执行且业务绑定完整的样例。
+    # 原始对话文本和半成品绑定不写入可复用记忆，避免后续 SQL 生成
+    # 继承失败轮次或歧义轮次的上下文。
     sql = str(state.get("sql") or "").strip()
     final_answer = state.get("final_answer") or []
     business_binding = _trusted_business_binding(state)
@@ -197,7 +197,7 @@ def build_retrieval_query(query: str, conversation_history: str) -> str:
 
 
 def _trusted_business_binding(state: dict[str, Any]) -> dict[str, Any]:
-    """Return only validated binding slots that are safe to persist as SQL memory."""
+    """只返回已经过校验、可以安全写入 SQL 记忆的绑定槽位。"""
 
     binding = dict(state.get("business_binding") or {})
     if state.get("metric_bindings"):

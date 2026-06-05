@@ -7,7 +7,7 @@ import random
 import time
 from collections import OrderedDict, deque
 from contextvars import ContextVar, Token
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -51,11 +51,7 @@ class CircuitState:
     open_until: float = 0.0
     half_open_probe_in_flight: bool = False
     consecutive_rate_limit_errors: int = 0
-    recent_results: deque[tuple[float, bool]] = None
-
-    def __post_init__(self):
-        if self.recent_results is None:
-            self.recent_results = deque()
+    recent_results: deque[tuple[float, bool]] = field(default_factory=deque)
 
 
 @dataclass
@@ -277,39 +273,54 @@ async def invoke_llm_with_policy(
                 )
             except Exception as exc:
                 if isinstance(exc, LLMCallBudgetExceeded):
-                    setattr(exc, "retry_count", retry_count)
-                    setattr(exc, "breaker_state", breaker_state)
-                    setattr(exc, "retry_after_ms", retry_after_ms)
-                    setattr(exc, "throttle_wait_ms", throttle_wait_ms)
+                    _set_policy_error_metadata(
+                        exc,
+                        retry_count=retry_count,
+                        breaker_state=breaker_state,
+                        retry_after_ms=retry_after_ms,
+                        throttle_wait_ms=throttle_wait_ms,
+                    )
                     raise
                 if _is_quota_error(exc):
                     _open_model_circuit(policy_key, settings)
                     _record_final_failure(policy_key, exc, settings)
-                    setattr(exc, "retry_count", retry_count)
-                    setattr(exc, "breaker_state", "open")
-                    setattr(exc, "retry_after_ms", retry_after_ms)
-                    setattr(exc, "throttle_wait_ms", throttle_wait_ms)
+                    _set_policy_error_metadata(
+                        exc,
+                        retry_count=retry_count,
+                        breaker_state="open",
+                        retry_after_ms=retry_after_ms,
+                        throttle_wait_ms=throttle_wait_ms,
+                    )
                     raise
                 _record_failed_attempt(policy_key, exc, settings)
                 if _current_breaker_state(circuit) == "open":
-                    setattr(exc, "retry_count", retry_count)
-                    setattr(exc, "breaker_state", "open")
-                    setattr(exc, "retry_after_ms", retry_after_ms)
-                    setattr(exc, "throttle_wait_ms", throttle_wait_ms)
+                    _set_policy_error_metadata(
+                        exc,
+                        retry_count=retry_count,
+                        breaker_state="open",
+                        retry_after_ms=retry_after_ms,
+                        throttle_wait_ms=throttle_wait_ms,
+                    )
                     raise
                 if retry_count >= settings.max_retries:
                     _record_final_failure(policy_key, exc, settings)
-                    setattr(exc, "retry_count", retry_count)
-                    setattr(exc, "breaker_state", _current_breaker_state(circuit))
-                    setattr(exc, "retry_after_ms", retry_after_ms)
-                    setattr(exc, "throttle_wait_ms", throttle_wait_ms)
+                    _set_policy_error_metadata(
+                        exc,
+                        retry_count=retry_count,
+                        breaker_state=_current_breaker_state(circuit),
+                        retry_after_ms=retry_after_ms,
+                        throttle_wait_ms=throttle_wait_ms,
+                    )
                     raise
                 if not _is_retryable_error(exc):
                     _record_final_failure(policy_key, exc, settings)
-                    setattr(exc, "retry_count", retry_count)
-                    setattr(exc, "breaker_state", _current_breaker_state(circuit))
-                    setattr(exc, "retry_after_ms", retry_after_ms)
-                    setattr(exc, "throttle_wait_ms", throttle_wait_ms)
+                    _set_policy_error_metadata(
+                        exc,
+                        retry_count=retry_count,
+                        breaker_state=_current_breaker_state(circuit),
+                        retry_after_ms=retry_after_ms,
+                        throttle_wait_ms=throttle_wait_ms,
+                    )
                     raise
                 retry_count += 1
                 retry_delay = _retry_delay(exc, retry_count, settings)
@@ -376,6 +387,20 @@ def _store_cache(key: str, content: str):
 
 def _elapsed_ms(started_at: float) -> float:
     return round((time.perf_counter() - started_at) * 1000, 2)
+
+
+def _set_policy_error_metadata(
+    exc: Exception,
+    *,
+    retry_count: int,
+    breaker_state: str,
+    retry_after_ms: float | None,
+    throttle_wait_ms: float,
+) -> None:
+    setattr(exc, "retry_count", retry_count)
+    setattr(exc, "breaker_state", breaker_state)
+    setattr(exc, "retry_after_ms", retry_after_ms)
+    setattr(exc, "throttle_wait_ms", throttle_wait_ms)
 
 
 def _model_policy_key(llm) -> str:

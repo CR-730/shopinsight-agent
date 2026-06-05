@@ -138,10 +138,9 @@ class QueryService:
 
         try:
             yield _sse({"type": "progress", "step": "理解问题", "status": "running"})
-            # This first pass is intentionally metadata-light. It gives the UI an
-            # early natural-language understanding and raw mention candidates; the
-            # graph's business_binding node later validates those candidates against
-            # retrieved metadata before SQL generation can use them.
+            # 这一轮候选抽取故意不做元数据裁决，只负责给前端尽早返回
+            # “理解了什么”和原始业务对象候选；真正能否用于 SQL，仍由
+            # graph 里的 business_binding 基于召回元数据再次校验。
             binding_candidates = await extract_binding_candidates(
                 query,
                 SimpleNamespace(context=context),
