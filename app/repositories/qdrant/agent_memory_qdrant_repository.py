@@ -87,8 +87,8 @@ class AgentMemoryQdrantRepository:
         *,
         user_id: str,
         metadata_cache_version: str | None = None,
-        # Business query paths must keep this false. It exists only for admin,
-        # migration, or diagnostic tooling that intentionally audits old memories.
+        # 业务查询路径必须保持 false；只有管理、迁移或诊断工具
+        # 需要主动审计旧版本记忆时，才允许跨 metadata version 检索。
         allow_cross_metadata_version: bool = False,
         limit: int = 10,
         similarity_threshold: float = 0.7,
