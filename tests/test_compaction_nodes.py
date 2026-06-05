@@ -99,7 +99,7 @@ def test_context_compaction_returns_all_inner_updates(monkeypatch):
 
     result = asyncio.run(
         context_compaction_module.context_compaction(
-            {"query": "缁熻 GMV", "table_infos": ["raw_table"]},
+            {"query": "统计 GMV", "table_infos": ["raw_table"]},
             SimpleNamespace(context={"dw_mysql_repository": "repo"}),
         )
     )
@@ -143,7 +143,7 @@ def test_sql_executor_returns_corrected_sql_and_execution_state(monkeypatch):
     result = asyncio.run(
         sql_executor_module.sql_executor(
             {
-                "query": "缁熻 GMV",
+                "query": "统计 GMV",
                 "sql": "select bad",
                 "max_correction_attempts": 2,
             },
@@ -177,7 +177,7 @@ def test_sql_executor_returns_failed_correction_state(monkeypatch):
     result = asyncio.run(
         sql_executor_module.sql_executor(
             {
-                "query": "缁熻 GMV",
+                "query": "统计 GMV",
                 "sql": "select bad",
                 "correction_attempts": 2,
                 "max_correction_attempts": 2,
@@ -216,7 +216,7 @@ def test_sql_executor_has_internal_loop_limit(monkeypatch):
     result = asyncio.run(
         sql_executor_module.sql_executor(
             {
-                "query": "缁熻 GMV",
+                "query": "统计 GMV",
                 "sql": "select bad",
                 "max_correction_attempts": 2,
             },
