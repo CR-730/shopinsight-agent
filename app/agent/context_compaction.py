@@ -26,9 +26,12 @@ async def filter_table_context(
 ) -> dict[str, list[TableInfoState]]:
     query = state["query"]
     table_infos: list[TableInfoState] = state["table_infos"]
-    prompt_table_infos = compact_table_context_for_filtering(
-        table_infos, state.get("business_binding") or {}
-    )
+    if _ablation_options(context).get("disable_context_compaction"):
+        prompt_table_infos = table_infos
+    else:
+        prompt_table_infos = compact_table_context_for_filtering(
+            table_infos, state.get("business_binding") or {}
+        )
 
     prompt = PromptTemplate(
         template=load_prompt("filter_table_info"),
@@ -47,6 +50,7 @@ async def filter_table_context(
         "过滤表信息",
         context["cost_tracker"],
         app_config.llm.timeout_seconds,
+        cacheable=not _ablation_options(context).get("disable_non_sql_llm_cache"),
     )
 
     filtered_table_infos: list[TableInfoState] = []
@@ -148,3 +152,7 @@ def _protected_binding_columns(business_binding: dict) -> set[str]:
     time_binding = business_binding.get("time") or {}
     columns.update(str(item) for item in time_binding.get("required_columns") or [] if item)
     return columns
+
+
+def _ablation_options(context: dict[str, Any]) -> dict[str, Any]:
+    return dict(context.get("ablation_options") or {})

@@ -81,6 +81,9 @@ async def extract_binding_candidates(
             "业务候选抽取",
             runtime.context["cost_tracker"],
             app_config.llm.timeout_seconds,
+            cacheable=not _ablation_options(runtime.context).get(
+                "disable_non_sql_llm_cache"
+            ),
         )
         result.source_query = query
         return result
@@ -125,6 +128,10 @@ def _explicit_metric_mentions(query: str, metric_infos: list[dict[str, Any]]) ->
             if mention and mention in query:
                 mentions.add(mention)
     return sorted(mentions, key=len, reverse=True)
+
+
+def _ablation_options(context: dict[str, Any]) -> dict[str, Any]:
+    return dict(context.get("ablation_options") or {})
 
 
 def _explicit_filter_mentions(

@@ -46,3 +46,5 @@ class DataAgentContext(TypedDict):
     metadata_build_version: NotRequired[str | None]
     metadata_cache_version: NotRequired[str]
     user_id: NotRequired[str]
+    # 仅供离线消融评测使用；线上请求不传该字段，默认保持正常链路。
+    ablation_options: NotRequired[dict]

@@ -37,6 +37,9 @@ from app.retrieval.fusion import fuse_ranked_value_infos
 async def recall_sql_memory_context(
     state: DataAgentState, context: dict[str, Any]
 ) -> dict[str, str]:
+    if _ablation_options(context).get("disable_sql_memory"):
+        return {"sql_memory_context": ""}
+
     user_id = context.get("user_id") or "anonymous"
     if user_id == "anonymous":
         return {"sql_memory_context": ""}
@@ -152,6 +155,9 @@ async def recall_metric_context(
 async def recall_value_context(
     state: DataAgentState, context: dict[str, Any]
 ) -> dict[str, list[ValueInfo]]:
+    if _ablation_options(context).get("disable_value_recall"):
+        return {"retrieved_value_infos": []}
+
     step = "召回字段取值"
     query = state["query"]
     keywords = state["keywords"]
@@ -168,20 +174,32 @@ async def recall_value_context(
     keywords = set(normalize_keyword_list(keywords) + result)
     value_infos_map: dict[str, ValueInfo] = {}
     for keyword in keywords:
-        es_value_infos, vector_value_infos = await asyncio.gather(
-            _search_values_by_es(
-                value_es_repository,
-                keyword,
-                context.get("metadata_build_version"),
-            ),
-            _search_values_by_vector(
+        if _ablation_options(context).get("disable_value_es"):
+            es_value_infos = []
+            vector_value_infos = await _search_values_by_vector(
                 value_qdrant_repository,
                 embedding_client,
                 keyword,
                 context["cost_tracker"],
                 context.get("metadata_build_version"),
-            ),
-        )
+                _ablation_options(context),
+            )
+        else:
+            es_value_infos, vector_value_infos = await asyncio.gather(
+                _search_values_by_es(
+                    value_es_repository,
+                    keyword,
+                    context.get("metadata_build_version"),
+                ),
+                _search_values_by_vector(
+                    value_qdrant_repository,
+                    embedding_client,
+                    keyword,
+                    context["cost_tracker"],
+                    context.get("metadata_build_version"),
+                    _ablation_options(context),
+                ),
+            )
         current_value_infos = fuse_ranked_value_infos(
             {"es": es_value_infos, "vector": vector_value_infos},
             weights={
@@ -296,6 +314,7 @@ async def _extend_keywords(
             step,
             context["cost_tracker"],
             app_config.llm.timeout_seconds,
+            cacheable=not _ablation_options(context).get("disable_non_sql_llm_cache"),
         )
     except TimeoutError:
         logger.warning(f"{step} LLM 扩展超时，降级使用原始关键词")
@@ -306,7 +325,7 @@ async def _extend_keywords(
 async def _embed_keyword(keyword: str, step: str, embedding_client, context: dict[str, Any]):
     started_at = time.perf_counter()
     embedding = await ainvoke_with_timeout(
-        embedding_client.aembed_query(keyword),
+        _embed_query(keyword, embedding_client, context),
         app_config.agent.embedding_timeout_seconds,
     )
     context["cost_tracker"].add_embedding_usage(
@@ -315,9 +334,27 @@ async def _embed_keyword(keyword: str, step: str, embedding_client, context: dic
         estimated=True,
         model=app_config.embedding.model,
         latency_ms=round((time.perf_counter() - started_at) * 1000, 2),
-        cache_hit=bool(getattr(embedding_client, "last_cache_hit", False)),
+        cache_hit=_embedding_cache_hit(embedding_client, context),
     )
     return embedding
+
+
+async def _embed_query(keyword: str, embedding_client, context: dict[str, Any]):
+    if _ablation_options(context).get("disable_embedding_cache") and hasattr(
+        embedding_client, "inner"
+    ):
+        return await embedding_client.inner.aembed_query(keyword)
+    return await embedding_client.aembed_query(keyword)
+
+
+def _embedding_cache_hit(embedding_client, context: dict[str, Any]) -> bool:
+    if _ablation_options(context).get("disable_embedding_cache"):
+        return False
+    return bool(getattr(embedding_client, "last_cache_hit", False))
+
+
+def _ablation_options(context: dict[str, Any]) -> dict[str, Any]:
+    return dict(context.get("ablation_options") or {})
 
 
 async def _search_values_by_es(
@@ -335,10 +372,12 @@ async def _search_values_by_vector(
     keyword: str,
     cost_tracker,
     metadata_build_version: str | None,
+    ablation_options: dict[str, Any] | None = None,
 ):
     started_at = time.perf_counter()
+    context = {"ablation_options": ablation_options or {}}
     embedding = await ainvoke_with_timeout(
-        embedding_client.aembed_query(keyword),
+        _embed_query(keyword, embedding_client, context),
         app_config.agent.embedding_timeout_seconds,
     )
     cost_tracker.add_embedding_usage(
@@ -347,7 +386,7 @@ async def _search_values_by_vector(
         estimated=True,
         model=app_config.embedding.model,
         latency_ms=round((time.perf_counter() - started_at) * 1000, 2),
-        cache_hit=bool(getattr(embedding_client, "last_cache_hit", False)),
+        cache_hit=_embedding_cache_hit(embedding_client, context),
     )
     return await ainvoke_with_timeout(
         value_qdrant_repository.search(

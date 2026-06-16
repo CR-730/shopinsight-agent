@@ -96,6 +96,9 @@ async def classify_query_intent(
             "RAG前安全分类",
             runtime.context["cost_tracker"],
             app_config.llm.timeout_seconds,
+            cacheable=not _ablation_options(runtime.context).get(
+                "disable_non_sql_llm_cache"
+            ),
         )
         return result.model_dump()
     except Exception as exc:
@@ -117,3 +120,7 @@ def _should_block_classifier_result(result: dict[str, Any]) -> bool:
     if attack_type in {"out_of_scope", "incomplete"}:
         return result.get("should_block") is True and risk_level in {"medium", "high"}
     return result.get("should_block") is True
+
+
+def _ablation_options(context: dict[str, Any]) -> dict[str, Any]:
+    return dict(context.get("ablation_options") or {})
