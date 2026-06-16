@@ -114,6 +114,24 @@ def test_evaluate_case_checks_expected_unresolved_binding():
     assert result.passed is True
 
 
+def test_evaluate_case_reports_missing_expected_value_as_rag_failure():
+    case = EvalCase(
+        id="value_recall",
+        query="华东地区销售额",
+        expected_values=["dim_region.region_name.华东"],
+    )
+    state = {
+        "keywords": ["华东"],
+        "retrieved_value_infos": [],
+    }
+
+    result = evaluate_case(case, state)
+
+    assert result.passed is False
+    assert result.failure_stage == "rag_recall"
+    assert result.failures[0].code == "missing_expected_value"
+
+
 def test_evaluate_case_reports_structured_failures_and_stage():
     case = EvalCase(
         id="sales_by_region",
@@ -213,6 +231,7 @@ def test_load_eval_cases_supports_extended_schema(tmp_path):
   expected_sql_contains: [order_amount]
   expected_columns: [fact_order.order_amount]
   expected_metrics: [AOV]
+  expected_values: [dim_region.region_name.华东]
   expected_result: {mode: non_empty}
   forbidden_sql: [delete]
   must_call_tools: [mysql.dw.validate]
@@ -229,6 +248,7 @@ def test_load_eval_cases_supports_extended_schema(tmp_path):
     assert cases[0].difficulty == "hard"
     assert cases[0].capabilities == ["sql_generation"]
     assert cases[0].expected_result == {"mode": "non_empty"}
+    assert cases[0].expected_values == ["dim_region.region_name.华东"]
     assert cases[0].timeout_seconds == 45
 
 

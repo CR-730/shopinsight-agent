@@ -41,6 +41,7 @@ class EvalCase:
     expected_sql_contains: list[str] = field(default_factory=list)
     expected_columns: list[str] = field(default_factory=list)
     expected_metrics: list[str] = field(default_factory=list)
+    expected_values: list[str] = field(default_factory=list)
     expected_time_binding: dict[str, Any] | None = None
     expected_unresolved_binding: dict[str, Any] | None = None
     expected_result: Any = None
@@ -268,6 +269,16 @@ def _evaluate_failures(case: EvalCase, trace: dict[str, Any]) -> list[EvalFailur
                     code="missing_expected_metric",
                     message=f"缺少指标上下文：{metric}",
                     stage=stage,
+                )
+            )
+
+    for value_id in case.expected_values:
+        if value_id not in trace["retrieved_values"]:
+            failures.append(
+                EvalFailure(
+                    code="missing_expected_value",
+                    message=f"缺少字段取值召回：{value_id}",
+                    stage="rag_recall",
                 )
             )
 
