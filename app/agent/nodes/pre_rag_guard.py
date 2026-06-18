@@ -1,6 +1,5 @@
-"""Pre-RAG guard: intent safety, prompt-injection, and coarse routing."""
+"""Pre-RAG guard: LLM intent safety and coarse routing."""
 
-import re
 from typing import Any, Literal
 
 from langchain_core.output_parsers import PydanticOutputParser
@@ -12,8 +11,8 @@ from app.agent.context import DataAgentContext
 from app.agent.llm import llm
 from app.agent.llm_usage import ainvoke_llm_with_usage
 from app.agent.state import DataAgentState
+from app.agent.stop_signal import split_stop_signal
 from app.conf.app_config import app_config
-from app.conf.policy_config import load_policy_config
 from app.core.log import logger
 from app.prompt.prompt_loader import load_prompt
 
@@ -45,37 +44,29 @@ class PreRagGuardDecision(BaseModel):
 
 
 async def pre_rag_guard(state: DataAgentState, runtime: Runtime[DataAgentContext]):
-    """Block unsafe requests before retrieval and metadata access."""
+    """Block unsafe or out-of-scope requests before retrieval."""
 
     writer = runtime.stream_writer
     step = "RAG前安全闸门"
     writer({"type": "progress", "step": step, "status": "running"})
 
     query = state.get("query") or ""
-    rule_error = validate_query_by_rules(query)
-    if rule_error:
-        logger.warning(f"{step} rule blocked query: {rule_error}")
-        writer({"type": "progress", "step": step, "status": "blocked", "error": rule_error})
-        return {"safety_error": rule_error, "blocked_by": "pre_rag_guard"}
-
     classifier_result = await classify_query_intent(query, runtime)
     if _should_block_classifier_result(classifier_result):
-        reason = classifier_result.get("reason") or "RAG 前安全分类器判定应拦截"
-        logger.warning(f"{step} classifier blocked query: {classifier_result}")
+        reason = str(classifier_result.get("reason") or "").strip()
+        user_facing_message, _ = split_stop_signal(reason)
+        if user_facing_message:
+            _write_answer_delta(writer, "\n\n" + user_facing_message)
+        logger.warning("%s classifier blocked query: %s", step, classifier_result)
         writer({"type": "progress", "step": step, "status": "blocked", "error": reason})
-        return {"safety_error": reason, "blocked_by": "pre_rag_guard"}
+        return {
+            "safety_error": reason or "pre_rag_guard blocked query",
+            "blocked_by": "pre_rag_guard",
+            "user_facing_message": user_facing_message,
+        }
 
     writer({"type": "progress", "step": step, "status": "success"})
     return {"safety_error": None}
-
-
-def validate_query_by_rules(query: str) -> str | None:
-    lowered = query.lower()
-    patterns = load_policy_config().get("pre_rag", {}).get("rule_patterns", {})
-    for attack_type, pattern in patterns.items():
-        if re.search(pattern, lowered, flags=re.IGNORECASE):
-            return f"RAG 前规则拦截：{attack_type}"
-    return None
 
 
 async def classify_query_intent(
@@ -102,13 +93,13 @@ async def classify_query_intent(
         )
         return result.model_dump()
     except Exception as exc:
-        logger.warning(f"RAG 前安全分类失败，降级为规则结果: {exc}")
+        logger.warning("RAG 前安全分类失败，保守阻断：%s", exc)
         return {
             "is_prompt_injection": False,
             "attack_type": "classifier_error",
             "risk_level": "high",
             "should_block": True,
-            "reason": "RAG 前安全分类器失败，已按保守策略阻断",
+            "reason": "我现在没能可靠判断这个问题是否可以进入问数流程，请稍后再试。find_error",
         }
 
 
@@ -124,3 +115,9 @@ def _should_block_classifier_result(result: dict[str, Any]) -> bool:
 
 def _ablation_options(context: dict[str, Any]) -> dict[str, Any]:
     return dict(context.get("ablation_options") or {})
+
+
+def _write_answer_delta(writer, text: str) -> None:
+    content = str(text or "")
+    for index in range(0, len(content), 12):
+        writer({"type": "answer_delta", "delta": content[index : index + 12]})

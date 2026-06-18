@@ -35,7 +35,9 @@ async def validate_binding_candidates(
     filters, filter_issues = await resolve_filter_candidates(candidates, context)
     groups, group_issues = resolve_groupby_candidates(candidates, context.table_infos)
     time_binding = resolve_time_mentions(
-        [item.raw_text for item in candidates.time_mentions] + [candidates.source_query]
+        [item.normalized_text for item in candidates.time_mentions if item.normalized_text] +
+        [item.raw_text for item in candidates.time_mentions] + 
+        [candidates.source_query]
     )
     unresolved = [
         *metric_issues,
@@ -106,7 +108,7 @@ async def resolve_filter_candidates(
     columns_by_hint = _columns_by_hint(context.table_infos)
 
     for mention in candidates.filter_mentions:
-        raw_value = str(mention.raw_text or "").strip()
+        raw_value = str(mention.normalized_text or mention.raw_text or "").strip()
         field_hint = str(mention.field_hint or "").strip()
         if not raw_value:
             continue
@@ -143,7 +145,7 @@ def resolve_groupby_candidates(
     bound_columns: set[str] = set()
 
     for mention in candidates.groupby_mentions:
-        raw_text = str(mention.raw_text or "").strip()
+        raw_text = str(mention.normalized_text or mention.raw_text or "").strip()
         field_hint = str(mention.field_hint or "").strip()
         lookup_values = [field_hint, raw_text]
         column = ""

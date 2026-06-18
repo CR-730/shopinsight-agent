@@ -130,8 +130,9 @@ def test_sql_executor_returns_corrected_sql_and_execution_state(monkeypatch):
         assert context["dw_mysql_repository"] == "repo"
         return {"sql": "select corrected", "correction_attempts": 1}
 
-    async def fake_execute_sql(state, executor, writer):
+    async def fake_execute_sql(state, executor, writer, runtime):
         assert state["sql"] == "select corrected"
+        assert runtime.context["dw_mysql_repository"] == "repo"
         return {"final_answer": [{"GMV": 100}]}
 
     monkeypatch.setattr(sql_executor_module, "_pre_validate_sql", fake_pre_validate_sql)

@@ -157,6 +157,7 @@ class DataAgentState(TypedDict):
     sql: str  # 生成或校正后的SQL
     sql_explanation: NotRequired[str]
     final_answer: list[dict]  # SQL 执行结果，用于评测 trace 和最终返回
+    result_analysis: NotRequired[str]  # LLM 对执行结果的自然语言解读
 
     error: str  # 校验SQL时出现的错误信息
     safety_error: str  # SQL 执行前安全/语义闸门错误信息

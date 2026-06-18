@@ -20,6 +20,7 @@ from app.agent.business_binding.validator import (
 from app.agent.llm import llm
 from app.agent.llm_usage import ainvoke_llm_with_usage
 from app.agent.memory import sliding_conversation_history
+from app.agent.stop_signal import split_stop_signal
 from app.conf.app_config import app_config
 from app.core.log import logger
 from app.prompt.prompt_loader import load_prompt
@@ -60,8 +61,40 @@ async def business_binding(
             metric_infos=state.get("metric_infos") or [],
             retrieved_value_infos=state.get("retrieved_value_infos") or [],
             enum_aliases=enum_aliases,
+            table_infos=state.get("table_infos"),
         )
-        _write_answer_delta(writer, candidates.user_response)
+    user_response, should_stop = split_stop_signal(candidates.user_response)
+    if user_response and not state.get("binding_candidates"):
+        _write_answer_delta(writer, user_response)
+    if should_stop:
+        writer(
+            {
+                "type": "progress",
+                "step": step,
+                "status": "blocked",
+                "error": candidates.user_response,
+            }
+        )
+        return {
+            "business_binding": {
+                "metrics": [],
+                "filters": [],
+                "groups": [],
+                "time": None,
+                "unresolved": [],
+                "ambiguous": [],
+            },
+            "metric_bindings": [],
+            "resolved_filters": [],
+            "groupby_bindings": [],
+            "time_binding": None,
+            "validated_enum_values": [],
+            "unresolved_bindings": [],
+            "ambiguous_bindings": [],
+            "safety_error": candidates.user_response,
+            "blocked_by": "business_binding",
+            "user_facing_message": user_response,
+        }
     binding = await validate_binding_candidates(
         candidates,
         BindingValidationContext(

@@ -30,6 +30,7 @@ from app.agent.memory import (
     sliding_conversation_history,
 )
 from app.agent.state import DataAgentState
+from app.agent.stop_signal import split_stop_signal
 from app.conf.app_config import app_config
 from app.repositories.es.value_es_repository import ValueESRepository
 from app.repositories.mysql.dw.dw_mysql_repository import DWMySQLRepository
@@ -150,11 +151,38 @@ class QueryService:
                 enum_aliases={},
             )
             state["binding_candidates"] = binding_candidates.model_dump()
-            async for delta_event in _answer_delta_stream(
+            user_response, should_stop = split_stop_signal(
                 binding_candidates.user_response
-            ):
+            )
+            async for delta_event in _answer_delta_stream(user_response):
                 assistant_text_parts.append(delta_event["delta"])
                 yield _sse(delta_event)
+            if should_stop:
+                final_state = {
+                    "safety_error": binding_candidates.user_response,
+                    "blocked_by": "binding_candidate_extractor",
+                    "user_facing_message": user_response,
+                }
+                yield _sse(
+                    {
+                        "type": "progress",
+                        "step": "理解问题",
+                        "status": "blocked",
+                    }
+                )
+                yield _sse({"type": "answer_done"})
+                await self._save_memory_after_query(
+                    conversation=conversation,
+                    query=query,
+                    memory_query=memory_query,
+                    metadata_cache_version=metadata_cache_version,
+                    final_state=final_state,
+                    assistant_content="".join(assistant_text_parts).strip(),
+                )
+                if include_trace:
+                    yield _sse({"type": "trace", "data": final_state})
+                yield _sse({"type": "usage", "data": cost_tracker.summary()})
+                return
             yield _sse({"type": "progress", "step": "理解问题", "status": "success"})
             yield _sse({"type": "progress", "step": "检索上下文", "status": "running"})
 

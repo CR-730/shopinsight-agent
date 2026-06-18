@@ -4,8 +4,13 @@ from __future__ import annotations
 
 import calendar
 import re
+from datetime import date
 
 from app.agent.state import TimeBindingState
+
+
+def _current_year() -> int:
+    return date.today().year
 
 
 def resolve_time_mentions(raw_texts: list[str]) -> TimeBindingState | None:
@@ -30,15 +35,29 @@ def resolve_time_binding(text: str) -> TimeBindingState | None:
 
 
 def _parse_quarter(text: str) -> TimeBindingState | None:
+    # 匹配 "2025年一季度" / "一季度" / "Q1" 
     pattern = re.compile(
-        r"(?P<year>\d{4})\s*年?\s*(?:第?\s*(?P<cn>[一二三四])|Q(?P<num>[1-4]))\s*季度?",
+        r"(?:(?P<year>\d{4})\s*年?\s*)?(?:第?\s*(?P<cn>[一二三四])|Q(?P<num>[1-4]))(?:季度)?",
         re.I,
     )
     match = pattern.search(text)
     if not match:
         return None
-    year = int(match.group("year"))
+        
     quarter_num = int(match.group("num") or _cn_quarter_to_number(match.group("cn")))
+    quarter = f"Q{quarter_num}"
+    year_str = match.group("year")
+    
+    if not year_str:
+        return {
+            "raw_text": match.group(0).strip(),
+            "grain": "quarter",
+            "quarter": quarter,
+            "strategy": "column_value",
+            "required_columns": ["dim_date.quarter"],
+        }
+        
+    year = int(year_str)
     start_month = (quarter_num - 1) * 3 + 1
     end_month = start_month + 2
     _, end_day = calendar.monthrange(year, end_month)
@@ -46,7 +65,7 @@ def _parse_quarter(text: str) -> TimeBindingState | None:
         "raw_text": match.group(0).strip(),
         "grain": "quarter",
         "year": year,
-        "quarter": f"Q{quarter_num}",
+        "quarter": quarter,
         "start_date": f"{year:04d}-{start_month:02d}-01",
         "end_date": f"{year:04d}-{end_month:02d}-{end_day:02d}",
         "start_date_id": int(f"{year:04d}{start_month:02d}01"),
@@ -57,10 +76,20 @@ def _parse_quarter(text: str) -> TimeBindingState | None:
 
 
 def _parse_month(text: str) -> TimeBindingState | None:
+    # 优先匹配带年份，其次匹配 "x月" 无年份写法
     match = re.search(r"(?P<year>\d{4})\s*年\s*(?P<month>\d{1,2})\s*月", text)
     if not match:
         match = re.search(r"(?P<year>\d{4})-(?P<month>\d{1,2})(?!-\d)", text)
     if not match:
+        m2 = re.search(r"(?<![\d-])(?P<month>\d{1,2})\s*月", text)
+        if m2:
+            return {
+                "raw_text": m2.group(0).strip(),
+                "grain": "month",
+                "month": int(m2.group("month")),
+                "strategy": "column_value",
+                "required_columns": ["dim_date.month"],
+            }
         return None
     year = int(match.group("year"))
     month = int(match.group("month"))

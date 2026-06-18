@@ -609,6 +609,40 @@ def test_business_binding_node_uses_candidates_and_metadata(monkeypatch):
     assert result["unresolved_bindings"] == []
 
 
+def test_business_binding_node_blocks_llm_stop_signal():
+    class MetaRepository:
+        async def list_value_aliases(self):
+            return []
+
+    class Runtime:
+        stream_writer = staticmethod(lambda _: None)
+        context = {
+            "meta_mysql_repository": MetaRepository(),
+            "dw_mysql_repository": DWRepository(),
+            "cost_tracker": object(),
+        }
+
+    result = asyncio.run(
+        business_binding(
+            {
+                "query": "今天天气怎么样",
+                "binding_candidates": BindingCandidates(
+                    user_response=(
+                        "你是在问今天的天气情况，但我只能处理电商经营数据查询，"
+                        "无法提供天气信息。find_error"
+                    )
+                ).model_dump(),
+            },
+            Runtime(),
+        )
+    )
+
+    assert result["blocked_by"] == "business_binding"
+    assert result["user_facing_message"] == (
+        "你是在问今天的天气情况，但我只能处理电商经营数据查询，无法提供天气信息。"
+    )
+
+
 def test_filter_metric_prunes_by_bound_metric_without_llm():
     from app.agent.context_compaction import filter_metric_context
 

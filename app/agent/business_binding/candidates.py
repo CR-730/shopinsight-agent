@@ -27,6 +27,7 @@ class FilterMention(BaseModel):
 
     raw_text: str = Field(default="")
     field_hint: str = Field(default="")
+    normalized_text: str = Field(default="")
 
 
 class TimeMention(BaseModel):
@@ -34,6 +35,7 @@ class TimeMention(BaseModel):
 
     raw_text: str = Field(default="")
     granularity_hint: str = Field(default="")
+    normalized_text: str = Field(default="")
 
 
 class GroupByMention(BaseModel):
@@ -41,6 +43,7 @@ class GroupByMention(BaseModel):
 
     raw_text: str = Field(default="")
     field_hint: str = Field(default="")
+    normalized_text: str = Field(default="")
 
 
 class BindingCandidates(BaseModel):
@@ -62,6 +65,7 @@ async def extract_binding_candidates(
     metric_infos: list[dict[str, Any]],
     retrieved_value_infos: list[Any],
     enum_aliases: dict[str, dict[str, str]],
+    table_infos: list[dict[str, Any]] | None = None,
 ) -> BindingCandidates:
     parser = PydanticOutputParser(pydantic_object=BindingCandidates)
     prompt = PromptTemplate(
@@ -70,6 +74,28 @@ async def extract_binding_candidates(
         partial_variables={"format_instructions": parser.get_format_instructions()},
     )
     try:
+        metric_infos_context = ", ".join(
+            [f"{m.get('name')}(别名: {','.join(m.get('alias', []) or [])})" for m in metric_infos]
+        )
+        
+        enum_list = []
+        for aliases in enum_aliases.values():
+            for alias, canon in aliases.items():
+                enum_list.append(f"{alias}->{canon}")
+        for v in retrieved_value_infos:
+            val = str(getattr(v, "value", "") or "")
+            if val:
+                enum_list.append(val)
+        enum_aliases_context = ", ".join(set(enum_list))
+        
+        time_examples_context = ""
+        if table_infos:
+            for t in table_infos:
+                if t.get("name") == "dim_date":
+                    for col in t.get("columns", []):
+                        if col.get("name") in ["quarter", "month", "year"]:
+                            time_examples_context += f"{col.get('name')}示例: {col.get('examples', [])}\n"
+
         result = await ainvoke_llm_with_usage(
             prompt,
             llm,
@@ -77,6 +103,9 @@ async def extract_binding_candidates(
             {
                 "query": query,
                 "conversation_history": conversation_history or "无",
+                "metric_infos_context": metric_infos_context or "无",
+                "enum_aliases_context": enum_aliases_context or "无",
+                "time_examples_context": time_examples_context or "无",
             },
             "业务候选抽取",
             runtime.context["cost_tracker"],
@@ -109,7 +138,7 @@ def fallback_binding_candidates(
         for mention in _explicit_metric_mentions(query, metric_infos)
     ]
     filters = [
-        FilterMention(raw_text=mention, field_hint="")
+        FilterMention(raw_text=mention, field_hint="", normalized_text=mention)
         for mention in _explicit_filter_mentions(query, retrieved_value_infos, enum_aliases)
     ]
     return BindingCandidates(
