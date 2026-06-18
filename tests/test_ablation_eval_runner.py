@@ -8,6 +8,7 @@ from app.scripts.run_ablation_eval import (
     _save_seed_sql_memory,
     ablation_specs,
     select_ablation_cases,
+    selected_ablation_specs,
     summarize_ablation_results,
 )
 
@@ -50,6 +51,14 @@ def test_ablation_specs_keep_retrieval_basic_without_sql_memory_or_value_recall(
     assert specs[("cost", "unoptimized")].ablation_options[
         "disable_context_compaction"
     ] is True
+
+
+def test_selected_ablation_specs_filters_phase_and_variant():
+    specs = selected_ablation_specs(phase="retrieval", variant="retrieval_full")
+
+    assert len(specs) == 1
+    assert specs[0].phase == "retrieval"
+    assert specs[0].variant == "retrieval_full"
 
 
 def test_validation_off_is_dry_run_and_does_not_emit_sql_or_usage():

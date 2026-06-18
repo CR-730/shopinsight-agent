@@ -136,15 +136,31 @@ def ablation_specs() -> list[AblationRunSpec]:
     ]
 
 
+def selected_ablation_specs(
+    *, phase: str | None = None, variant: str | None = None
+) -> list[AblationRunSpec]:
+    specs = ablation_specs()
+    if phase:
+        specs = [spec for spec in specs if spec.phase == phase]
+    if variant:
+        specs = [spec for spec in specs if spec.variant == variant]
+    if not specs:
+        raise ValueError(f"no ablation specs matched phase={phase!r}, variant={variant!r}")
+    return specs
+
+
 async def run_ablation_eval(
     cases_path: Path,
     output_path: Path | None = None,
     *,
     smoke_limit: int | None = None,
+    phase: str | None = None,
+    variant: str | None = None,
+    seed_user_id_override: str | None = None,
 ) -> int:
     started_at = _now_iso()
     run_id = started_at.replace(":", "-")
-    seed_user_id = f"ablation-seed:{run_id}"
+    seed_user_id = seed_user_id_override or f"ablation-seed:{run_id}"
     started = time.perf_counter()
 
     qdrant_client_manager.init()
@@ -171,7 +187,7 @@ async def run_ablation_eval(
                 "meta_mysql_repository"
             ].get_metadata_cache_version()
 
-            for spec in ablation_specs():
+            for spec in selected_ablation_specs(phase=phase, variant=variant):
                 spec_cases = _limit_cases(case_groups[spec.case_tag], smoke_limit)
                 for case in spec_cases:
                     if spec.dry_run_validation_off:
@@ -554,6 +570,13 @@ if __name__ == "__main__":
         default=None,
         help="每个阶段/变体只跑前 N 条，用于快速检查报告结构",
     )
+    parser.add_argument("--phase", default=None, help="只运行指定阶段，例如 cost/guard/retrieval/seed")
+    parser.add_argument("--variant", default=None, help="只运行指定变体，例如 optimized/retrieval_full")
+    parser.add_argument(
+        "--seed-user-id",
+        default=None,
+        help="复用指定 seed 用户的 SQL memory，便于分阶段运行消融",
+    )
     args = parser.parse_args()
     raise SystemExit(
         asyncio.run(
@@ -561,6 +584,9 @@ if __name__ == "__main__":
                 cases_path=Path(args.cases),
                 output_path=Path(args.output) if args.output else None,
                 smoke_limit=args.smoke_limit,
+                phase=args.phase,
+                variant=args.variant,
+                seed_user_id_override=args.seed_user_id,
             )
         )
     )
