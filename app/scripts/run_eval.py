@@ -30,6 +30,10 @@ from app.clients.mysql_client_manager import (
 from app.clients.qdrant_client_manager import qdrant_client_manager
 from app.conf.app_config import app_config
 from app.evaluation.cases import EvalCase, evaluate_case, load_eval_cases
+from app.evaluation.text2sql_metrics import (
+    evaluate_text2sql_metrics,
+    summarize_text2sql_metrics,
+)
 from app.repositories.es.value_es_repository import ValueESRepository
 from app.repositories.mysql.dw.dw_mysql_repository import DWMySQLRepository
 from app.repositories.mysql.meta.meta_mysql_repository import MetaMySQLRepository
@@ -109,6 +113,7 @@ async def run_eval(cases_path: Path, output_path: Path | None = None) -> int:
             "summary": summary,
             "usage": _summarize_usage([item["usage"] for item in results]),
             "cost": _summarize_cost([item["usage"] for item in results]),
+            "text2sql_metrics": summarize_text2sql_metrics(results),
             "total_latency_seconds": total_latency_seconds,
             "capability_summary": _dimension_summary(
                 results, "capabilities", ALL_CAPABILITIES
@@ -201,6 +206,7 @@ async def _run_case(case: EvalCase, repositories: dict[str, Any]) -> dict[str, A
 
     payload = result.to_dict()
     payload["case"] = case.to_dict()
+    payload["metrics"] = evaluate_text2sql_metrics(case, result)
     payload["usage"] = cost_tracker.summary()
     payload["latency_seconds"] = round(time.perf_counter() - started, 3)
     return payload

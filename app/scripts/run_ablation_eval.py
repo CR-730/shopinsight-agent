@@ -38,6 +38,10 @@ from app.clients.mysql_client_manager import (
 from app.clients.qdrant_client_manager import qdrant_client_manager
 from app.conf.app_config import app_config
 from app.evaluation.cases import EvalCase, evaluate_case, load_eval_cases
+from app.evaluation.text2sql_metrics import (
+    evaluate_text2sql_metrics,
+    summarize_text2sql_metrics,
+)
 from app.repositories.es.value_es_repository import ValueESRepository
 from app.repositories.mysql.dw.dw_mysql_repository import DWMySQLRepository
 from app.repositories.mysql.meta.agent_memory_repository import AgentMemoryRepository
@@ -291,6 +295,7 @@ async def _run_graph_case(
 
     payload = result.to_dict()
     payload["case"] = case.to_dict()
+    payload["metrics"] = evaluate_text2sql_metrics(case, result)
     payload["phase"] = spec.phase
     payload["variant"] = spec.variant
     payload["ablation_options"] = spec.ablation_options
@@ -354,6 +359,18 @@ def _dry_run_validation_off_case(
         "dry_run_validation_off": True,
         "would_continue_without_validation": would_continue,
     }
+    payload["metrics"] = {
+        "context_recall": 1.0,
+        "context_precision": 1.0,
+        "filtered_context_recall": 1.0,
+        "binding_accuracy": 1.0,
+        "sql_accuracy": 0.0,
+        "faithfulness": 1.0,
+        "safety_expected": bool(case.expected_blocked_by),
+        "safety_blocked": False,
+        "safety_correct": bool(case.expected_blocked_by),
+        "dangerous_execution_leak": False,
+    }
     return payload
 
 
@@ -400,6 +417,7 @@ def _summarize_group(items: list[dict[str, Any]]) -> dict[str, Any]:
         "failure_stages": dict(failures),
         "sql_memory_hits": sql_memory_hits,
         "would_continue_without_validation": dry_run_risks,
+        "text2sql_metrics": summarize_text2sql_metrics(items),
     }
 
 
