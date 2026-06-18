@@ -55,6 +55,7 @@ async def filter_table_context(
 
     filtered_table_infos: list[TableInfoState] = []
     protected_columns = _protected_binding_columns(state.get("business_binding") or {})
+    table_infos = await _ensure_protected_columns(table_infos, protected_columns, context)
     for table_info in table_infos:
         selected_columns = set(result.get(table_info["name"]) or [])
         selected_columns.update(
@@ -152,6 +153,53 @@ def _protected_binding_columns(business_binding: dict) -> set[str]:
     time_binding = business_binding.get("time") or {}
     columns.update(str(item) for item in time_binding.get("required_columns") or [] if item)
     return columns
+
+
+async def _ensure_protected_columns(
+    table_infos: list[TableInfoState],
+    protected_columns: set[str],
+    context: dict[str, Any],
+) -> list[TableInfoState]:
+    missing_columns = _missing_protected_columns(table_infos, protected_columns)
+    if not missing_columns or "meta_mysql_repository" not in context:
+        return table_infos
+
+    column_infos = await context["meta_mysql_repository"].list_column_infos()
+    column_by_id = {getattr(column_info, "id", ""): column_info for column_info in column_infos}
+    table_by_name = {table_info["name"]: table_info for table_info in table_infos}
+    for column_id in missing_columns:
+        column_info = column_by_id.get(column_id)
+        if not column_info:
+            continue
+        table_name, _, _ = column_id.partition(".")
+        table_info = table_by_name.get(table_name)
+        if not table_info:
+            continue
+        table_info.setdefault("columns", []).append(_column_info_to_state(column_info))
+    return table_infos
+
+
+def _missing_protected_columns(
+    table_infos: list[TableInfoState],
+    protected_columns: set[str],
+) -> set[str]:
+    existing = {
+        f"{table_info['name']}.{column_info['name']}"
+        for table_info in table_infos
+        for column_info in table_info.get("columns") or []
+    }
+    return protected_columns - existing
+
+
+def _column_info_to_state(column_info) -> dict[str, Any]:
+    return {
+        "name": column_info.name,
+        "type": column_info.type,
+        "role": column_info.role,
+        "description": column_info.description,
+        "alias": list(column_info.alias or []),
+        "examples": list(column_info.examples or []),
+    }
 
 
 def _ablation_options(context: dict[str, Any]) -> dict[str, Any]:

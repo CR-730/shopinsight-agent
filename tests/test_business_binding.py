@@ -5,6 +5,7 @@ from app.agent.business_binding.candidates import (
     FilterMention,
     GroupByMention,
     MetricMention,
+    TimeMention,
     fallback_binding_candidates,
 )
 from app.agent.business_binding.time_resolver import resolve_time_binding
@@ -71,6 +72,23 @@ def _customer_table():
                     "alias": ["会员等级", "用户等级"],
                     "examples": ["普通", "黄金"],
                 },
+            ],
+        }
+    ]
+
+
+def _product_table():
+    return [
+        {
+            "name": "dim_product",
+            "role": "dimension",
+            "columns": [
+                {
+                    "name": "product_name",
+                    "role": "dimension",
+                    "alias": ["商品", "商品名称"],
+                    "examples": ["iPhone 15 Pro"],
+                }
             ],
         }
     ]
@@ -343,7 +361,7 @@ def test_time_candidate_parses_quarter_to_date_range():
         "start_date_id": 20250101,
         "end_date_id": 20250331,
         "strategy": "date_range",
-        "required_columns": ["fact_order.date_id"],
+        "required_columns": ["fact_order.date_id", "dim_date.year", "dim_date.quarter"],
     }
 
 
@@ -527,8 +545,50 @@ def test_time_resolver_uses_source_query_when_time_mentions_are_missing():
         "start_date_id": 20250101,
         "end_date_id": 20250331,
         "strategy": "date_range",
-        "required_columns": ["fact_order.date_id"],
+        "required_columns": ["fact_order.date_id", "dim_date.year", "dim_date.quarter"],
     }
+
+
+def test_time_resolver_prefers_more_specific_source_query_over_normalized_quarter():
+    binding = asyncio.run(
+        validate_binding_candidates(
+            BindingCandidates(
+                time_mentions=[
+                    TimeMention(raw_text="2025年第一季度", normalized_text="Q1")
+                ],
+                source_query="2025年第一季度各品牌订单笔数",
+            ),
+            _context(),
+        )
+    )
+
+    assert binding["time"]["year"] == 2025
+    assert binding["time"]["quarter"] == "Q1"
+    assert binding["time"]["start_date_id"] == 20250101
+    assert binding["time"]["end_date_id"] == 20250331
+
+
+def test_rank_query_without_metric_binding_is_ambiguous():
+    binding = asyncio.run(
+        validate_binding_candidates(
+            BindingCandidates(
+                source_query="按商品看前五名",
+                groupby_mentions=[
+                    GroupByMention(raw_text="商品", field_hint="商品")
+                ],
+            ),
+            _context(table_infos=_product_table()),
+        )
+    )
+
+    assert binding["ambiguous"] == [
+        {
+            "type": "metric",
+            "raw_text": "按商品看前五名",
+            "candidate_column": "",
+            "reason": "ranking_metric_required",
+        }
+    ]
 
 
 def test_fallback_candidates_only_use_explicit_metadata_and_rag_hits():

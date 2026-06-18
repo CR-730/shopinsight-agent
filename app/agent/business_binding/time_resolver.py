@@ -14,11 +14,22 @@ def _current_year() -> int:
 
 
 def resolve_time_mentions(raw_texts: list[str]) -> TimeBindingState | None:
+    best_binding: TimeBindingState | None = None
     for raw_text in raw_texts:
         binding = resolve_time_binding(raw_text)
-        if binding:
-            return binding
-    return None
+        if binding and _specificity_score(binding) > _specificity_score(best_binding):
+            best_binding = binding
+    return best_binding
+
+
+def _specificity_score(binding: TimeBindingState | None) -> int:
+    if not binding:
+        return 0
+    score = 1
+    for key in ("year", "start_date_id", "end_date_id", "month"):
+        if binding.get(key) is not None:
+            score += 1
+    return score
 
 
 def resolve_time_binding(text: str) -> TimeBindingState | None:
@@ -71,7 +82,7 @@ def _parse_quarter(text: str) -> TimeBindingState | None:
         "start_date_id": int(f"{year:04d}{start_month:02d}01"),
         "end_date_id": int(f"{year:04d}{end_month:02d}{end_day:02d}"),
         "strategy": "date_range",
-        "required_columns": ["fact_order.date_id"],
+        "required_columns": ["fact_order.date_id", "dim_date.year", "dim_date.quarter"],
     }
 
 

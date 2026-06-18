@@ -1,9 +1,11 @@
 ﻿import asyncio
 from types import SimpleNamespace
 
+from app.agent import context_compaction as context_compaction_helpers
 from app.agent.nodes import context_builder as context_builder_module
 from app.agent.nodes import context_compaction as context_compaction_module
 from app.agent.nodes import sql_executor as sql_executor_module
+from app.entities.column_info import ColumnInfo
 
 
 def test_context_builder_returns_all_inner_updates(monkeypatch):
@@ -110,6 +112,76 @@ def test_context_compaction_returns_all_inner_updates(monkeypatch):
         "date_info": {"date": "2026-06-03", "weekday": "Wednesday", "quarter": "Q2"},
         "db_info": {"dialect": "mysql", "version": "8.0"},
     }
+
+
+def test_filter_table_context_adds_missing_protected_columns_from_metadata(monkeypatch):
+    async def fake_ainvoke_llm_with_usage(*args, **kwargs):
+        return {"dim_date": ["date_id", "quarter"]}
+
+    class MetaRepository:
+        async def list_column_infos(self):
+            return [
+                ColumnInfo(
+                    id="dim_date.year",
+                    name="year",
+                    type="int",
+                    role="dimension",
+                    examples=[2025],
+                    description="年份",
+                    alias=["年份"],
+                    table_id="dim_date",
+                )
+            ]
+
+    monkeypatch.setattr(
+        context_compaction_helpers,
+        "ainvoke_llm_with_usage",
+        fake_ainvoke_llm_with_usage,
+    )
+
+    result = asyncio.run(
+        context_compaction_helpers.filter_table_context(
+            {
+                "query": "2025年第一季度各大区销售额",
+                "business_binding": {
+                    "time": {
+                        "required_columns": [
+                            "fact_order.date_id",
+                            "dim_date.year",
+                            "dim_date.quarter",
+                        ]
+                    }
+                },
+                "table_infos": [
+                    {
+                        "name": "dim_date",
+                        "role": "dimension",
+                        "columns": [
+                            {
+                                "name": "date_id",
+                                "role": "primary_key",
+                                "alias": ["日期ID"],
+                                "examples": [20250101],
+                            },
+                            {
+                                "name": "quarter",
+                                "role": "dimension",
+                                "alias": ["季度"],
+                                "examples": ["Q1"],
+                            },
+                        ],
+                    }
+                ],
+            },
+            {
+                "cost_tracker": None,
+                "meta_mysql_repository": MetaRepository(),
+            },
+        )
+    )
+
+    columns = result["table_infos"][0]["columns"]
+    assert {column["name"] for column in columns} == {"date_id", "quarter", "year"}
 
 
 def test_sql_executor_returns_corrected_sql_and_execution_state(monkeypatch):

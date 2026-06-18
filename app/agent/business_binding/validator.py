@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import Any
 
@@ -44,13 +45,14 @@ async def validate_binding_candidates(
         *filter_issues,
         *group_issues,
     ]
+    ambiguous = _intent_completeness_issues(candidates, metrics, filters, groups)
     return {
         "metrics": metrics,
         "filters": filters,
         "groups": groups,
         "time": time_binding,
         "unresolved": unresolved,
-        "ambiguous": [],
+        "ambiguous": ambiguous,
     }
 
 
@@ -229,6 +231,49 @@ def validate_business_binding_state(state: dict[str, Any]) -> str | None:
 
 def validated_enum_values(filters: list[ResolvedFilterState]) -> list[str]:
     return [literal for item in filters for literal in item["allowed_sql_literals"]]
+
+
+def _intent_completeness_issues(
+    candidates: BindingCandidates,
+    metrics: list[MetricBindingState],
+    filters: list[ResolvedFilterState],
+    groups: list[GroupByBindingState],
+) -> list[BindingIssueState]:
+    if metrics:
+        return []
+    query = str(candidates.source_query or "").strip()
+    if not query:
+        return []
+    if _looks_like_rank_or_comparison(query):
+        return [_missing_metric_issue(query, "ranking_metric_required")]
+    if filters and not groups:
+        return [_missing_metric_issue(query, "metric_required_for_filter_only_query")]
+    if groups and not _looks_like_plain_list_query(query):
+        return [_missing_metric_issue(query, "metric_required_for_group_query")]
+    return []
+
+
+def _looks_like_rank_or_comparison(query: str) -> bool:
+    return bool(
+        re.search(
+            r"(top\s*\d+|前\s*[一二三四五六七八九十\d]+|排名|排行|最好|最高|最低|最多|最少|表现)",
+            query,
+            re.I,
+        )
+    )
+
+
+def _looks_like_plain_list_query(query: str) -> bool:
+    return bool(re.search(r"(有哪些|列表|明细|列出)", query))
+
+
+def _missing_metric_issue(query: str, reason: str) -> BindingIssueState:
+    return {
+        "type": "metric",
+        "raw_text": query,
+        "candidate_column": "",
+        "reason": reason,
+    }
 
 
 def _metric_catalog(metric_infos: list[dict[str, Any]]):
