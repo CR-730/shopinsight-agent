@@ -113,40 +113,63 @@ def evaluate_case(case: EvalCase, state: dict[str, Any]) -> EvalResult:
 
 
 def build_trace(state: dict[str, Any]) -> dict[str, Any]:
-    retrieved_columns = _entity_ids(state.get("retrieved_column_infos") or [])
-    retrieved_metrics = _metric_names(state.get("retrieved_metric_infos") or [])
-    retrieved_values = _value_ids(state.get("retrieved_value_infos") or [])
-    filtered_columns = sorted(_extract_column_ids(state.get("table_infos") or []))
+    debug_trace = state.get("trace") or {}
+    sql_context = state.get("sql_context") or {}
+    retrieved_columns = sorted(debug_trace.get("retrieved_columns") or [])
+    retrieved_metrics = sorted(debug_trace.get("retrieved_metrics") or [])
+    retrieved_values = sorted(debug_trace.get("retrieved_values") or [])
+    filtered_columns = sorted(_extract_column_ids(sql_context.get("tables") or []))
     filtered_metrics = sorted(
         metric_info.get("name")
-        for metric_info in state.get("metric_infos") or []
+        for metric_info in sql_context.get("metrics") or []
         if metric_info.get("name")
     )
     generated_sql = str(state.get("sql") or "")
-    sql_error = state.get("error")
-    safety_error = state.get("safety_error")
-    blocked_by = state.get("blocked_by")
-    final_answer = state.get("final_answer")
-    exception_stage = state.get("exception_stage")
+    failure = state.get("failure") or {}
+    failure_category = str(failure.get("category") or "")
+    failure_disposition = str(failure.get("disposition") or "")
+    failure_message = str(failure.get("message") or "")
+    sql_error = (
+        failure_message
+        if failure_category == "sql_validation"
+        and failure_disposition == "failed"
+        else None
+    )
+    safety_error = failure_message if failure_disposition == "blocked" else None
+    blocked_by = (
+        _normalize_stage_alias(str(failure.get("stage") or ""))
+        if failure_disposition == "blocked"
+        else None
+    )
+    output = state.get("output") or {}
+    final_answer = output.get("rows")
+    exception_stage = (
+        failure.get("stage")
+        if failure_disposition == "failed"
+        and failure_category in {"sql_execution", "system"}
+        else None
+    )
+    business_binding = state.get("business_binding") or {}
 
     return {
         "exception_stage": exception_stage,
-        "keywords": state.get("keywords") or [],
+        "keywords": debug_trace.get("keywords") or [],
         "retrieved_columns": retrieved_columns,
         "retrieved_metrics": retrieved_metrics,
         "retrieved_values": retrieved_values,
         "filtered_columns": filtered_columns,
         "filtered_metrics": filtered_metrics,
-        "metric_bindings": state.get("metric_bindings") or [],
-        "resolved_filters": state.get("resolved_filters") or [],
-        "business_binding": state.get("business_binding") or {},
-        "time_binding": state.get("time_binding"),
-        "unresolved_bindings": state.get("unresolved_bindings") or [],
-        "ambiguous_bindings": state.get("ambiguous_bindings") or [],
+        "metric_bindings": business_binding.get("metrics") or [],
+        "resolved_filters": business_binding.get("filters") or [],
+        "business_binding": business_binding,
+        "time_binding": business_binding.get("time"),
+        "unresolved_bindings": business_binding.get("unresolved") or [],
+        "ambiguous_bindings": business_binding.get("ambiguous") or [],
         "generated_sql": generated_sql,
         "sql_error": sql_error,
         "safety_error": safety_error,
         "blocked_by": blocked_by,
+        "failure": failure,
         "tool_calls": _infer_tool_calls(state),
         "final_answer": final_answer,
     }
@@ -201,10 +224,11 @@ def _evaluate_failures(case: EvalCase, trace: dict[str, Any]) -> list[EvalFailur
             )
         )
 
-    expected_any_guard = case.expected_blocked_by == "any_guard"
+    expected_blocked_by = _normalize_stage_alias(case.expected_blocked_by or "")
+    expected_any_guard = expected_blocked_by == "any_guard"
     if (
         trace.get("safety_error") is not None
-        and trace.get("blocked_by") != case.expected_blocked_by
+        and trace.get("blocked_by") != expected_blocked_by
         and not expected_any_guard
     ):
         blocked_by = trace.get("blocked_by") or "safety_guard"
@@ -225,14 +249,14 @@ def _evaluate_failures(case: EvalCase, trace: dict[str, Any]) -> list[EvalFailur
             )
         )
     elif (
-        case.expected_blocked_by
+        expected_blocked_by
         and not expected_any_guard
-        and trace.get("blocked_by") != case.expected_blocked_by
+        and trace.get("blocked_by") != expected_blocked_by
     ):
         failures.append(
             EvalFailure(
                 code="missing_expected_block",
-                message=f"未被预期闸门拦截：{case.expected_blocked_by}",
+                message=f"未被预期闸门拦截：{expected_blocked_by}",
                 stage="safety",
             )
         )
@@ -419,27 +443,35 @@ def _value_ids(items: list[Any]) -> list[str]:
 
 
 def _infer_tool_calls(state: dict[str, Any]) -> list[str]:
-    calls = {"pre_rag_guard"}
-    if state.get("keywords") is not None:
+    calls = {"intent_recognition"}
+    debug_trace = state.get("trace") or {}
+    if debug_trace.get("keywords") is not None:
         calls.add("keyword_extraction")
-    if state.get("retrieved_column_infos") is not None:
+    if debug_trace.get("retrieved_columns") is not None:
         calls.add("qdrant.column.search")
-    if state.get("retrieved_metric_infos") is not None:
+    if debug_trace.get("retrieved_metrics") is not None:
         calls.add("qdrant.metric.search")
-    if state.get("retrieved_value_infos") is not None:
+    if debug_trace.get("retrieved_values") is not None:
         calls.add("hybrid.value.search")
         calls.add("es.value.search")
         calls.add("qdrant.value.search")
     if state.get("sql"):
         calls.add("llm.sql.generate")
         calls.add("mysql.dw.validate")
-    if state.get("safety_error") is not None:
-        calls.add(state.get("blocked_by") or "safety_guard")
-    if state.get("correction_attempts", 0) > 0:
+    failure = state.get("failure") or {}
+    if failure.get("disposition") == "blocked":
+        calls.add(_normalize_stage_alias(failure.get("stage") or "safety_guard"))
+    if (state.get("trace") or {}).get("sql_correction_attempts", 0) > 0:
         calls.add("llm.sql.correct")
-    if state.get("final_answer") is not None:
+    if (state.get("output") or {}).get("rows") is not None:
         calls.add("mysql.dw.execute")
     return sorted(calls)
+
+
+def _normalize_stage_alias(stage: str) -> str:
+    if stage == "pre_rag_guard":
+        return "intent_recognition"
+    return stage
 
 
 def _stage_for_tool(tool: str) -> FailureStage:

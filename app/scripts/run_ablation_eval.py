@@ -20,6 +20,7 @@ from typing import Any
 
 from app.agent.context import DataAgentContext
 from app.agent.cost import CostRates, CostTracker
+from app.agent.failure import build_failure
 from app.agent.graph import graph
 from app.agent.llm_usage import (
     reset_llm_cache_context_namespace,
@@ -38,10 +39,6 @@ from app.clients.mysql_client_manager import (
 from app.clients.qdrant_client_manager import qdrant_client_manager
 from app.conf.app_config import app_config
 from app.evaluation.cases import EvalCase, evaluate_case, load_eval_cases
-from app.evaluation.text2sql_metrics import (
-    evaluate_text2sql_metrics,
-    summarize_text2sql_metrics,
-)
 from app.repositories.es.value_es_repository import ValueESRepository
 from app.repositories.mysql.dw.dw_mysql_repository import DWMySQLRepository
 from app.repositories.mysql.meta.agent_memory_repository import AgentMemoryRepository
@@ -283,11 +280,7 @@ async def _run_graph_case(
         user_id=user_id,
         ablation_options=spec.ablation_options,
     )
-    state = DataAgentState(
-        query=case.query,
-        correction_attempts=0,
-        max_correction_attempts=app_config.agent.max_sql_correction_attempts,
-    )
+    state = DataAgentState(query=case.query)
     started = time.perf_counter()
     cache_namespace_token = set_llm_cache_context_namespace(
         f"metadata:{metadata_cache_version}"
@@ -311,13 +304,12 @@ async def _run_graph_case(
 
     payload = result.to_dict()
     payload["case"] = case.to_dict()
-    payload["metrics"] = evaluate_text2sql_metrics(case, result)
     payload["phase"] = spec.phase
     payload["variant"] = spec.variant
     payload["ablation_options"] = spec.ablation_options
     payload["usage"] = cost_tracker.summary()
     payload["latency_seconds"] = round(time.perf_counter() - started, 3)
-    payload["sql_memory_hit"] = bool(str(final_state.get("sql_memory_context") or "").strip())
+    payload["sql_memory_hit"] = bool(final_state.get("sql_memory_examples") or [])
     return payload, dict(final_state)
 
 
@@ -375,18 +367,6 @@ def _dry_run_validation_off_case(
         "dry_run_validation_off": True,
         "would_continue_without_validation": would_continue,
     }
-    payload["metrics"] = {
-        "context_recall": 1.0,
-        "context_precision": 1.0,
-        "filtered_context_recall": 1.0,
-        "binding_accuracy": 1.0,
-        "sql_accuracy": 0.0,
-        "faithfulness": 1.0,
-        "safety_expected": bool(case.expected_blocked_by),
-        "safety_blocked": False,
-        "safety_correct": bool(case.expected_blocked_by),
-        "dangerous_execution_leak": False,
-    }
     return payload
 
 
@@ -433,7 +413,6 @@ def _summarize_group(items: list[dict[str, Any]]) -> dict[str, Any]:
         "failure_stages": dict(failures),
         "sql_memory_hits": sql_memory_hits,
         "would_continue_without_validation": dry_run_risks,
-        "text2sql_metrics": summarize_text2sql_metrics(items),
     }
 
 
@@ -512,15 +491,17 @@ def _new_cost_tracker() -> CostTracker:
 
 def _exception_state(case: EvalCase, stage: str, error: str) -> dict[str, Any]:
     return {
-        "keywords": [],
-        "exception_stage": stage,
-        "error": error,
+        "failure": build_failure(
+            category="system",
+            stage=stage,
+            code="ablation_case_exception",
+            message=error,
+            disposition="failed",
+        ),
         "sql": "",
-        "table_infos": [],
-        "metric_infos": [],
-        "retrieved_column_infos": [],
-        "retrieved_metric_infos": [],
-        "retrieved_value_infos": [],
+        "sql_context": {"tables": [], "metrics": []},
+        "retrieval_context": {"columns": [], "metrics": [], "values": []},
+        "trace": {"keywords": [], "retrieved_columns": [], "retrieved_metrics": [], "retrieved_values": []},
     }
 
 

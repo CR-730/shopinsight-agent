@@ -13,6 +13,7 @@ from typing import Any
 
 from app.agent.context import DataAgentContext
 from app.agent.cost import CostRates, CostTracker
+from app.agent.failure import build_failure
 from app.agent.graph import graph
 from app.agent.llm_usage import (
     reset_llm_cache_context_namespace,
@@ -30,10 +31,6 @@ from app.clients.mysql_client_manager import (
 from app.clients.qdrant_client_manager import qdrant_client_manager
 from app.conf.app_config import app_config
 from app.evaluation.cases import EvalCase, evaluate_case, load_eval_cases
-from app.evaluation.text2sql_metrics import (
-    evaluate_text2sql_metrics,
-    summarize_text2sql_metrics,
-)
 from app.repositories.es.value_es_repository import ValueESRepository
 from app.repositories.mysql.dw.dw_mysql_repository import DWMySQLRepository
 from app.repositories.mysql.meta.meta_mysql_repository import MetaMySQLRepository
@@ -113,7 +110,6 @@ async def run_eval(cases_path: Path, output_path: Path | None = None) -> int:
             "summary": summary,
             "usage": _summarize_usage([item["usage"] for item in results]),
             "cost": _summarize_cost([item["usage"] for item in results]),
-            "text2sql_metrics": summarize_text2sql_metrics(results),
             "total_latency_seconds": total_latency_seconds,
             "capability_summary": _dimension_summary(
                 results, "capabilities", ALL_CAPABILITIES
@@ -159,11 +155,7 @@ async def _run_case(case: EvalCase, repositories: dict[str, Any]) -> dict[str, A
         metadata_build_version=metadata_build_version,
         metadata_cache_version=metadata_cache_version,
     )
-    state = DataAgentState(
-        query=case.query,
-        correction_attempts=0,
-        max_correction_attempts=app_config.agent.max_sql_correction_attempts,
-    )
+    state = DataAgentState(query=case.query)
     started = time.perf_counter()
     cache_namespace_token = set_llm_cache_context_namespace(
         f"metadata:{metadata_cache_version}"
@@ -180,24 +172,32 @@ async def _run_case(case: EvalCase, repositories: dict[str, Any]) -> dict[str, A
         result = evaluate_case(
             case,
             {
-                "keywords": [],
-                "exception_stage": exception_stage,
-                "error": f"节点或评测用例超时：{case.timeout_seconds} 秒",
+                "trace": {"keywords": []},
+                "failure": build_failure(
+                    category="system",
+                    stage=exception_stage,
+                    code="case_timeout",
+                    message=f"节点或评测用例超时：{case.timeout_seconds} 秒",
+                    disposition="failed",
+                ),
                 "sql": "",
-                "table_infos": [],
-                "metric_infos": [],
+                "sql_context": {"tables": [], "metrics": []},
             },
         )
     except Exception as exc:
         result = evaluate_case(
             case,
             {
-                "keywords": [],
-                "exception_stage": _infer_exception_stage(exc),
-                "error": str(exc),
+                "trace": {"keywords": []},
+                "failure": build_failure(
+                    category="system",
+                    stage=_infer_exception_stage(exc),
+                    code=exc.__class__.__name__,
+                    message=str(exc),
+                    disposition="failed",
+                ),
                 "sql": "",
-                "table_infos": [],
-                "metric_infos": [],
+                "sql_context": {"tables": [], "metrics": []},
             },
         )
     finally:
@@ -206,7 +206,6 @@ async def _run_case(case: EvalCase, repositories: dict[str, Any]) -> dict[str, A
 
     payload = result.to_dict()
     payload["case"] = case.to_dict()
-    payload["metrics"] = evaluate_text2sql_metrics(case, result)
     payload["usage"] = cost_tracker.summary()
     payload["latency_seconds"] = round(time.perf_counter() - started, 3)
     return payload

@@ -49,21 +49,27 @@ def test_evaluate_case_passes_when_sql_and_context_match():
         must_call_tools=["mysql.dw.validate"],
     )
     state = {
-        "keywords": ["华北", "销售额"],
         "error": None,
         "sql": "select sum(fact_order.order_amount) from fact_order join dim_region where dim_region.region_name = '华北'",
-        "retrieved_column_infos": [],
-        "retrieved_metric_infos": [],
-        "retrieved_value_infos": [],
-        "table_infos": [
-            {"name": "fact_order", "columns": [{"name": "order_amount"}]},
-            {"name": "dim_region", "columns": [{"name": "region_name"}]},
-        ],
-        "metric_infos": [{"name": "GMV"}],
-        "metric_bindings": [{"canonical_metric": "GMV", "raw_mention": "销售额"}],
-        "resolved_filters": [{"canonical_value": "华北", "raw_value": "北方区域"}],
-        "time_binding": {"grain": "quarter", "year": 2025},
-        "final_answer": [{"销售总额": 1}],
+        "trace": {
+            "keywords": ["华北", "销售额"],
+            "retrieved_columns": [],
+            "retrieved_metrics": [],
+            "retrieved_values": [],
+        },
+        "sql_context": {
+            "tables": [
+                {"name": "fact_order", "columns": [{"name": "order_amount"}]},
+                {"name": "dim_region", "columns": [{"name": "region_name"}]},
+            ],
+            "metrics": [{"name": "GMV"}],
+        },
+        "business_binding": {
+            "metrics": [{"canonical_metric": "GMV", "raw_mention": "销售额"}],
+            "filters": [{"canonical_value": "华北", "raw_value": "北方区域"}],
+            "time": {"grain": "quarter", "year": 2025},
+        },
+        "output": {"rows": [{"销售总额": 1}]},
     }
 
     result = evaluate_case(case, state)
@@ -94,19 +100,25 @@ def test_evaluate_case_checks_expected_unresolved_binding():
         },
     )
     state = {
-        "keywords": ["火星", "区域", "销售额"],
-        "error": None,
+        "trace": {"keywords": ["火星", "区域", "销售额"]},
         "sql": "",
-        "safety_error": "业务绑定未解析",
-        "blocked_by": "business_binding",
-        "unresolved_bindings": [
-            {
-                "type": "enum_value",
-                "raw_text": "火星",
-                "candidate_column": "dim_region.region_name",
-                "reason": "value_not_found",
-            }
-        ],
+        "failure": {
+            "category": "business_binding",
+            "stage": "business_binding",
+            "code": "value_not_found",
+            "message": "业务绑定未解析",
+            "disposition": "blocked",
+        },
+        "business_binding": {
+            "unresolved": [
+                {
+                    "type": "enum_value",
+                    "raw_text": "火星",
+                    "candidate_column": "dim_region.region_name",
+                    "reason": "value_not_found",
+                }
+            ]
+        },
     }
 
     result = evaluate_case(case, state)
@@ -121,8 +133,10 @@ def test_evaluate_case_reports_missing_expected_value_as_rag_failure():
         expected_values=["dim_region.region_name.华东"],
     )
     state = {
-        "keywords": ["华东"],
-        "retrieved_value_infos": [],
+        "trace": {
+            "keywords": ["华东"],
+            "retrieved_values": [],
+        },
     }
 
     result = evaluate_case(case, state)
@@ -139,9 +153,14 @@ def test_evaluate_case_accepts_any_guard_expected_block():
         expected_blocked_by="any_guard",
     )
     state = {
-        "keywords": [],
-        "safety_error": "拦截",
-        "blocked_by": "pre_rag_guard",
+        "trace": {"keywords": []},
+        "failure": {
+            "category": "input_guard",
+            "stage": "pre_rag_guard",
+            "code": "privacy_detail",
+            "message": "拦截",
+            "disposition": "blocked",
+        },
     }
 
     result = evaluate_case(case, state)
@@ -159,11 +178,16 @@ def test_evaluate_case_reports_structured_failures_and_stage():
         fatal_errors=["sql_validation_error"],
     )
     state = {
-        "keywords": [],
-        "error": "Unknown column",
+        "trace": {"keywords": []},
+        "failure": {
+            "category": "sql_validation",
+            "stage": "sql_validation",
+            "code": "sql_validation_error",
+            "message": "Unknown column",
+            "disposition": "failed",
+        },
         "sql": "select 1",
-        "table_infos": [],
-        "metric_infos": [],
+        "sql_context": {"tables": [], "metrics": []},
     }
 
     result = evaluate_case(case, state)
@@ -192,12 +216,16 @@ def test_evaluate_case_does_not_add_missing_context_noise_for_empty_timeout_stat
         expected_result={"mode": "non_empty"},
     )
     state = {
-        "keywords": [],
-        "exception_stage": "tool_execution",
-        "error": "case timeout while waiting for run_sql",
+        "trace": {"keywords": []},
+        "failure": {
+            "category": "sql_execution",
+            "stage": "tool_execution",
+            "code": "timeout",
+            "message": "case timeout while waiting for run_sql",
+            "disposition": "failed",
+        },
         "sql": "",
-        "table_infos": [],
-        "metric_infos": [],
+        "sql_context": {"tables": [], "metrics": []},
     }
 
     result = evaluate_case(case, state)
@@ -218,12 +246,21 @@ def test_evaluate_case_keeps_tool_execution_timeout_stage_for_sql_state():
         expected_result={"mode": "non_empty"},
     )
     state = {
-        "keywords": ["GMV"],
-        "exception_stage": "tool_execution",
-        "error": "SQL 执行超时：60 秒",
+        "trace": {"keywords": ["GMV"]},
+        "failure": {
+            "category": "sql_execution",
+            "stage": "tool_execution",
+            "code": "timeout",
+            "message": "SQL 执行超时：60 秒",
+            "disposition": "failed",
+        },
         "sql": "select sum(order_amount) from fact_order",
-        "table_infos": [{"name": "fact_order", "columns": [{"name": "order_amount"}]}],
-        "metric_infos": [{"name": "GMV"}],
+        "sql_context": {
+            "tables": [
+                {"name": "fact_order", "columns": [{"name": "order_amount"}]}
+            ],
+            "metrics": [{"name": "GMV"}],
+        },
     }
 
     result = evaluate_case(case, state)

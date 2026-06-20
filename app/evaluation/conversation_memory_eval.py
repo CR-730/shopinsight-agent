@@ -81,15 +81,18 @@ async def _check_recall_after_guard_contract() -> dict[str, Any]:
     runtime = _context(repository, user_id="user-a", metadata_cache_version="meta-v1")
 
     update = await recall_sql_memory_context(
-        {"query": "那华东呢", "conversation_history": "user: 统计华北 GMV"},
+        {
+            "query": "那华东呢",
+            "conversation_messages": [{"role": "user", "content": "统计华北 GMV"}],
+        },
         runtime,
     )
 
     return _result(
-        "sql_memory_context 在安全闸门后由节点召回",
+        "sql_memory_examples 在安全闸门后由节点召回",
         len(repository.search_calls) == 1
         and repository.search_calls[0]["metadata_cache_version"] == "meta-v1"
-        and update["sql_memory_context"] == "",
+        and update["sql_memory_examples"] == [],
     )
 
 
@@ -101,8 +104,8 @@ async def _check_anonymous_recall_is_empty() -> dict[str, Any]:
     )
 
     return _result(
-        "匿名用户 sql_memory_context 为空",
-        update["sql_memory_context"] == "" and repository.search_calls == [],
+        "匿名用户 sql_memory_examples 为空",
+        update["sql_memory_examples"] == [] and repository.search_calls == [],
     )
 
 
@@ -165,9 +168,27 @@ async def _check_blocked_and_error_do_not_write_memory() -> dict[str, Any]:
     service = SimpleNamespace(agent_memory_repository=repository)
 
     for final_state in [
-        {**_successful_state(), "blocked_by": "pre_rag_guard"},
-        {**_successful_state(), "error": "sql failed"},
-        {"sql": "select 1", "final_answer": [{"GMV": 1}]},
+        {
+            **_successful_state(),
+            "failure": {
+                "category": "input_guard",
+                "stage": "pre_rag_guard",
+                "code": "blocked",
+                "message": "blocked",
+                "disposition": "blocked",
+            },
+        },
+        {
+            **_successful_state(),
+            "failure": {
+                "category": "sql_execution",
+                "stage": "tool_execution",
+                "code": "failed",
+                "message": "sql failed",
+                "disposition": "failed",
+            },
+        },
+        {"sql": "select 1", "output": {"rows": [{"GMV": 1}]}},
     ]:
         await QueryService._save_memory_after_query(
             service,
@@ -178,13 +199,13 @@ async def _check_blocked_and_error_do_not_write_memory() -> dict[str, Any]:
             final_state=final_state,
         )
 
-    return _result("blocked/error/无 binding 不写长期 SQL memory", repository.saved_tool_usage == [])
+    return _result("失败或无 binding 不写长期 SQL memory", repository.saved_tool_usage == [])
 
 
 def _successful_state() -> dict[str, Any]:
     return {
         "sql": "select 1 as GMV",
-        "final_answer": [{"GMV": 1}],
+        "output": {"rows": [{"GMV": 1}]},
         "business_binding": {"metrics": [{"canonical_metric": "GMV"}]},
     }
 

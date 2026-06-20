@@ -96,7 +96,7 @@ def test_seed_memory_only_saves_successful_bound_sql():
     repository = FakeMemoryRepository()
     final_state = {
         "sql": "select sum(order_amount) from fact_order",
-        "final_answer": [{"GMV": 1}],
+        "output": {"rows": [{"GMV": 1}]},
         "business_binding": {
             "metrics": [
                 {
@@ -132,7 +132,7 @@ def test_seed_memory_rejects_unbound_successful_sql():
     saved = asyncio.run(
         _save_seed_sql_memory(
             case=EvalCase(id="bad", query="统计数据"),
-            final_state={"sql": "select 1", "final_answer": [{"x": 1}]},
+            final_state={"sql": "select 1", "output": {"rows": [{"x": 1}]}},
             repositories={"agent_memory_repository": FakeMemoryRepository()},
             user_id="ablation-seed:test",
             metadata_cache_version="meta-v1",
@@ -229,8 +229,8 @@ def test_sql_memory_recall_respects_ablation_options_and_metadata_version():
         )
     )
 
-    assert disabled_update == {"sql_memory_context": ""}
-    assert enabled_update == {"sql_memory_context": ""}
+    assert disabled_update == {"sql_memory_examples": []}
+    assert enabled_update == {"sql_memory_examples": []}
     assert len(repository.calls) == 1
     assert repository.calls[0]["user_id"] == "ablation-seed:test"
     assert repository.calls[0]["metadata_cache_version"] == "meta-v1"

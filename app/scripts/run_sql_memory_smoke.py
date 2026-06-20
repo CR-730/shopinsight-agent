@@ -42,7 +42,7 @@ class SmokeResult:
     recall_sql: str
     direct_memory_count: int
     direct_memory_context: str
-    trace_sql_memory_context: str
+    trace_sql_memory_examples: list[dict[str, Any]]
 
 
 def _parse_sse(chunk: str) -> dict[str, Any] | None:
@@ -78,9 +78,10 @@ async def _collect_query(
 
 
 def _assert_success_trace(trace: dict[str, Any], label: str) -> None:
-    if trace.get("blocked_by") or trace.get("safety_error") or trace.get("error"):
+    if trace.get("failure"):
         raise AssertionError(f"{label} failed before SQL execution: {trace}")
-    if not trace.get("sql") or not trace.get("final_answer"):
+    output = trace.get("output") or {}
+    if not trace.get("sql") or not output.get("rows"):
         raise AssertionError(f"{label} did not produce successful SQL result: {trace}")
 
 
@@ -145,9 +146,9 @@ async def run_smoke(seed_query: str, recall_query: str) -> SmokeResult:
                 conversation_id=conversation_id,
             )
             _assert_success_trace(recall_trace, "recall query")
-            sql_memory_context = str(recall_trace.get("sql_memory_context") or "")
-            if not sql_memory_context:
-                raise AssertionError("recall query did not receive sql_memory_context")
+            sql_memory_examples = list(recall_trace.get("sql_memory_examples") or [])
+            if not sql_memory_examples:
+                raise AssertionError("recall query did not receive sql_memory_examples")
 
             return SmokeResult(
                 user_id=user_id,
@@ -159,7 +160,7 @@ async def run_smoke(seed_query: str, recall_query: str) -> SmokeResult:
                 recall_sql=str(recall_trace.get("sql") or ""),
                 direct_memory_count=len(direct_results),
                 direct_memory_context=format_tool_memory_results(direct_results),
-                trace_sql_memory_context=sql_memory_context,
+                trace_sql_memory_examples=sql_memory_examples,
             )
     finally:
         if qdrant_client_manager.client is not None:
