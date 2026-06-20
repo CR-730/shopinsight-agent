@@ -71,13 +71,13 @@ export function MessageBubble({ message }: { message: ChatMessage }) {
 
 function AssistantParts({ parts }: { parts: MessagePart[] }) {
   return (
-    <div className="space-y-3">
+    <div className="space-y-4">
       {parts.map((part) => {
         if (part.type === "status") {
           return <ReasoningStatusLine key={part.id} label={part.label} active={part.status === "running"} />;
         }
         return (
-          <div key={part.id} className="prose-chat">
+          <div key={part.id} className="prose-chat pt-1">
             <AssistantContent content={part.content} />
           </div>
         );

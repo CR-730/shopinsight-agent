@@ -94,6 +94,7 @@ export type ChatMessage = {
   error?: string;
   usage?: UsageSummary;
   conversationId?: string;
+  pendingStatusPart?: Extract<MessagePart, { type: "status" }>;
 };
 
 export type ResultMeta = {

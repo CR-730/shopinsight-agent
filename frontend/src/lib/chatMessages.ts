@@ -8,6 +8,8 @@ import type {
 } from "../types/agent";
 import { summarizeResult } from "./format";
 
+type StatusPart = Extract<MessagePart, { type: "status" }>;
+
 export function makeId() {
   return crypto.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(16).slice(2)}`;
 }
@@ -44,26 +46,78 @@ export function appendStatusPart(
   ];
 }
 
-export function appendTextPart(parts: MessagePart[] = [], delta: string): MessagePart[] {
-  const settledParts = settleStatusParts(parts);
+export function applyProgressToParts(
+  parts: MessagePart[] = [],
+  pendingStatusPart: StatusPart | undefined,
+  event: ProgressEvent,
+): Pick<ChatMessage, "parts" | "pendingStatusPart"> {
+  if (event.status !== "running") {
+    return { parts, pendingStatusPart };
+  }
+
+  const nextStatus = makeStatusPart(event);
+  if (!nextStatus) {
+    return { parts, pendingStatusPart };
+  }
+
+  const visibleParts = pendingStatusPart ? [...parts, pendingStatusPart] : parts;
+  if (visibleParts.some((part) => part.type === "status" && part.label === nextStatus.label)) {
+    return { parts, pendingStatusPart };
+  }
+
+  const lastVisible = parts[parts.length - 1];
+  const nextRank = statusRank(nextStatus.label);
+  const previousStatus = [...parts, pendingStatusPart]
+    .reverse()
+    .find((part): part is StatusPart => part?.type === "status");
+  if (previousStatus && nextRank <= statusRank(previousStatus.label)) {
+    return { parts, pendingStatusPart };
+  }
+
+  // 状态不能连续展示：如果上一块已经是状态，新状态先暂存，等下一段正文再显示。
+  if (lastVisible?.type === "status") {
+    return { parts, pendingStatusPart: nextStatus };
+  }
+
+  return {
+    parts: [...settleStatusParts(parts), nextStatus],
+    pendingStatusPart: undefined,
+  };
+}
+
+export function appendTextPart(
+  parts: MessagePart[] = [],
+  delta: string,
+  pendingStatusPart?: StatusPart,
+): Pick<ChatMessage, "parts" | "pendingStatusPart"> {
+  const shouldConsumePending =
+    Boolean(pendingStatusPart) && parts[parts.length - 1]?.type !== "status";
+  const baseParts = shouldConsumePending ? [...parts, pendingStatusPart!] : parts;
+  const settledParts = settleStatusParts(baseParts);
   const last = settledParts[settledParts.length - 1];
   if (last?.type === "text") {
-    return [
-      ...settledParts.slice(0, -1),
-      {
-        ...last,
-        content: last.content + delta,
-      },
-    ];
+    return {
+      parts: [
+        ...settledParts.slice(0, -1),
+        {
+          ...last,
+          content: last.content + delta,
+        },
+      ],
+      pendingStatusPart: shouldConsumePending ? undefined : pendingStatusPart,
+    };
   }
-  return [
-    ...settledParts,
-    {
-      id: makeId(),
-      type: "text",
-      content: delta,
-    },
-  ];
+  return {
+    parts: [
+      ...settledParts,
+      {
+        id: makeId(),
+        type: "text",
+        content: delta,
+      },
+    ],
+    pendingStatusPart: shouldConsumePending ? undefined : pendingStatusPart,
+  };
 }
 
 export function settleStatusParts(parts: MessagePart[] = []): MessagePart[] {
@@ -103,10 +157,11 @@ export function applyAgentEventToAssistant(
   }
 
   if (event.type === "progress") {
+    const partsUpdate = applyProgressToParts(message.parts, message.pendingStatusPart, event);
     return {
       ...message,
       steps: upsertStep(message.steps, event),
-      parts: appendStatusPart(message.parts, event),
+      ...partsUpdate,
     };
   }
 
@@ -124,10 +179,11 @@ export function applyAgentEventToAssistant(
   }
 
   if (event.type === "answer_delta") {
+    const partsUpdate = appendTextPart(message.parts, event.delta, message.pendingStatusPart);
     return {
       ...message,
       content: message.content + event.delta,
-      parts: appendTextPart(message.parts, event.delta),
+      ...partsUpdate,
     };
   }
 
@@ -157,26 +213,37 @@ export function finishAssistantMessage(message: ChatMessage): ChatMessage {
 
 function stageLabel(step: string) {
   const normalized = step.toLowerCase();
-  if (/guard|安全|意图|理解|问题|rag/.test(normalized)) return "理解问题";
-  if (/context|召回|检索|过滤|字段|指标|绑定|business/.test(normalized)) {
-    return "检索上下文";
+  if (/intent|意图|理解|问题/.test(normalized)) return "理解问题";
+  if (
+    /context|召回|检索|过滤|字段|指标|绑定|business|generate|生成/.test(normalized)
+  ) {
+    return "准备查询";
   }
-  if (/generate|生成/.test(normalized)) return "生成查询";
   if (/result|返回|结果/.test(normalized)) return "返回结果";
   if (/sql|执行|校验|executor|validate/.test(normalized)) return "执行查询";
-  return "检索上下文";
+  return "准备查询";
 }
 
 function displayStatusLabel(label: string) {
   if (label === "理解问题") return "正在思考";
-  if (label === "检索上下文" || label === "生成查询") return "召回元数据并生成 SQL";
+  if (label === "准备查询") return "召回元数据并生成 SQL";
   if (label === "执行查询" || label === "返回结果") return "执行 SQL 并返回结果";
   return label;
+}
+
+function makeStatusPart(event: ProgressEvent): StatusPart | undefined {
+  const label = displayStatusLabel(stageLabel(event.step));
+  return {
+    id: makeId(),
+    type: "status",
+    label,
+    status: event.status,
+  };
 }
 
 function statusRank(label: string) {
   if (label === "正在思考") return 0;
   if (label === "召回元数据并生成 SQL") return 1;
-  if (label === "执行 SQL 并返回结果") return 2;
+  if (label === "执行 SQL 并返回结果") return 3;
   return 1;
 }
