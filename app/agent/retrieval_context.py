@@ -16,7 +16,7 @@ from app.agent.llm_usage import ainvoke_llm_with_usage
 from app.agent.memory import (
     SQL_TOOL_NAME,
     build_retrieval_query,
-    format_tool_memory_results,
+    tool_memory_results_to_examples,
 )
 from app.agent.state import (
     ColumnInfoState,
@@ -36,17 +36,17 @@ from app.retrieval.fusion import fuse_ranked_value_infos
 
 async def recall_sql_memory_context(
     state: DataAgentState, context: dict[str, Any]
-) -> dict[str, str]:
+) -> dict[str, list[dict[str, Any]]]:
     if _ablation_options(context).get("disable_sql_memory"):
-        return {"sql_memory_context": ""}
+        return {"sql_memory_examples": []}
 
     user_id = context.get("user_id") or "anonymous"
     if user_id == "anonymous":
-        return {"sql_memory_context": ""}
+        return {"sql_memory_examples": []}
 
     try:
         memory_query = build_retrieval_query(
-            state["query"], state.get("conversation_history") or ""
+            state["query"], state.get("conversation_messages") or []
         )
         results = await context["agent_memory_repository"].search_similar_usage(
             memory_query,
@@ -57,15 +57,15 @@ async def recall_sql_memory_context(
             tool_name_filter=SQL_TOOL_NAME,
         )
         logger.info(f"SQL 记忆召回成功: {len(results)} 条")
-        return {"sql_memory_context": format_tool_memory_results(results)}
+        return {"sql_memory_examples": tool_memory_results_to_examples(results)}
     except Exception as exc:
         logger.warning(f"SQL 记忆召回失败，降级为空上下文: {exc}")
-        return {"sql_memory_context": ""}
+        return {"sql_memory_examples": []}
 
 
 async def extract_retrieval_keywords(state: DataAgentState) -> dict[str, list[str]]:
     query = build_retrieval_query(
-        state["query"], state.get("conversation_history") or ""
+        state["query"], state.get("conversation_messages") or []
     )
     allow_pos = (
         "n",

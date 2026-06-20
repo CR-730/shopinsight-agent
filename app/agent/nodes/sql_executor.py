@@ -9,15 +9,12 @@ from langchain_core.prompts import PromptTemplate
 from langgraph.runtime import Runtime
 
 from app.agent.context import DataAgentContext
+from app.agent.failure import build_failure
 from app.agent.llm import llm
 from app.agent.llm_usage import ainvoke_llm_with_usage
 from app.agent.sql.sql_correction import correct_sql_candidate
 from app.agent.sql.sql_executor import SqlExecutionRequest, SqlExecutor
 from app.agent.sql.sql_guard import normalize_sql_for_execution
-from app.agent.sql_loop import (
-    DEFAULT_MAX_SQL_CORRECTION_ATTEMPTS,
-    route_after_pre_sql_execution_validation,
-)
 from app.agent.state import DataAgentState
 from app.conf.app_config import app_config
 from app.core.log import logger
@@ -29,54 +26,86 @@ async def sql_executor(state: DataAgentState, runtime: Runtime[DataAgentContext]
 
     writer = runtime.stream_writer
     current_state = dict(state)
-    accumulated_update = {}
+    accumulated_update = {"failure": None}
     executor = SqlExecutor(runtime.context["dw_mysql_repository"])
-    for _ in range(_max_sql_executor_iterations(current_state)):
-        validation_update = await _pre_validate_sql(current_state, executor)
-        current_state.update(validation_update)
-        accumulated_update.update(validation_update)
+    last_validation_error = ""
+    correction_attempts = 0
+    max_correction_attempts = app_config.agent.max_sql_correction_attempts
+    for _ in range(max(1, max_correction_attempts + 1)):
+        validation = await _pre_validate_sql(current_state, executor)
+        current_state["sql"] = validation["sql"]
+        accumulated_update["sql"] = validation["sql"]
+        last_validation_error = str(validation.get("validation_error") or "")
 
-        route = route_after_pre_sql_execution_validation(current_state)
-        if route == "pass":
+        if validation["status"] == "pass":
             run_update = await _execute_sql(current_state, executor, writer, runtime)
             current_state.update(run_update)
             accumulated_update.update(run_update)
             return accumulated_update
-        if route == "blocked":
-            return accumulated_update
-        if route == "fail_sql_correction":
-            fail_update = _fail_sql_correction(current_state)
-            current_state.update(fail_update)
-            accumulated_update.update(fail_update)
-            return accumulated_update
+        if validation["status"] == "blocked":
+            return {
+                **accumulated_update,
+                "failure": build_failure(
+                    category="sql_validation",
+                    stage="sql_executor",
+                    code="sql_safety_blocked",
+                    message=last_validation_error or "SQL 安全校验失败",
+                    disposition="blocked",
+                ),
+            }
 
-        correction_update = await correct_sql_candidate(current_state, runtime.context)
+        if correction_attempts >= max_correction_attempts:
+            return {
+                **accumulated_update,
+                "failure": _correction_failure(last_validation_error),
+            }
+
+        correction_update = await correct_sql_candidate(
+            current_state,
+            runtime.context,
+            last_validation_error,
+            correction_attempts=correction_attempts,
+            max_correction_attempts=max_correction_attempts,
+        )
+        correction_attempts = max(
+            int(correction_update.get("attempts") or 0),
+            correction_attempts + 1,
+        )
         current_state.update(correction_update)
-        accumulated_update.update(correction_update)
-    error = "SQL executor exceeded internal correction loop limit"
-    return {**accumulated_update, "error": error, "blocked_by": "sql_executor"}
-
-
-def _max_sql_executor_iterations(state: dict) -> int:
-    max_attempts = int(
-        state.get("max_correction_attempts") or DEFAULT_MAX_SQL_CORRECTION_ATTEMPTS
-    )
-    return max(1, max_attempts + 1)
+        accumulated_update["trace"] = {
+            **(current_state.get("trace") or {}),
+            **(accumulated_update.get("trace") or {}),
+            "sql_correction_attempts": correction_attempts,
+        }
+        accumulated_update.update(
+            {
+                key: value
+                for key, value in correction_update.items()
+                if key in {"sql"}
+            }
+        )
+    return {
+        **accumulated_update,
+        "failure": _correction_failure(last_validation_error),
+    }
 
 
 async def _pre_validate_sql(state: dict, executor: SqlExecutor) -> dict:
     sql = normalize_sql_for_execution(state["sql"])
     result = await executor.pre_validate(state, SqlExecutionRequest(sql=sql))
     if result.status == "repairable_error":
-        return {"sql": sql, "error": result.error, "safety_error": None}
+        return {
+            "sql": sql,
+            "status": "repairable_error",
+            "validation_error": result.error,
+        }
     if result.status == "blocked":
         return {
             "sql": sql,
-            "error": None,
-            "safety_error": result.error,
-            "blocked_by": "sql_executor",
+            "status": "blocked",
+            "validation_error": result.error,
         }
-    return {"sql": sql, "error": None, "safety_error": None}
+    return {"sql": sql, "status": "pass", "validation_error": None}
 
 
 async def _execute_sql(state: dict, executor: SqlExecutor, writer, runtime: Runtime) -> dict:
@@ -85,9 +114,13 @@ async def _execute_sql(state: dict, executor: SqlExecutor, writer, runtime: Runt
     if not result.ok:
         writer({"type": "progress", "step": "执行查询", "status": "error"})
         return {
-            "error": result.error or "SQL 执行失败",
-            "exception_stage": result.audit.get("exception_stage"),
-            "blocked_by": None,
+            "failure": build_failure(
+                category="sql_execution",
+                stage=str(result.audit.get("exception_stage") or "tool_execution"),
+                code=str(result.audit.get("error_type") or "execution_failed"),
+                message=result.error or "SQL 执行失败",
+                disposition="failed",
+            )
         }
 
     meta = _result_meta(state)
@@ -98,19 +131,28 @@ async def _execute_sql(state: dict, executor: SqlExecutor, writer, runtime: Runt
     if analysis:
         _write_answer_delta(writer, "\n\n" + analysis)
 
-    return {"final_answer": result.result, "result_meta": meta, "result_analysis": analysis}
-
-
-def _fail_sql_correction(state: dict) -> dict:
     return {
-        "error": state.get("safety_error") or state.get("error") or "SQL 校验失败",
-        "blocked_by": "sql_correction",
+        "output": {
+            "rows": result.result,
+            "meta": meta,
+            "analysis": analysis,
+        }
     }
+
+
+def _correction_failure(message: str) -> dict:
+    return build_failure(
+        category="sql_validation",
+        stage="sql_correction",
+        code="correction_exhausted",
+        message=message or "SQL 校验失败",
+        disposition="failed",
+    )
 
 
 def _result_meta(state: dict) -> dict:
     tables = []
-    for table in state.get("table_infos") or []:
+    for table in (state.get("sql_context") or {}).get("tables") or []:
         name = str(table.get("name") or "").strip()
         if name and name not in tables:
             tables.append(name)

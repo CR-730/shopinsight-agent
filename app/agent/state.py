@@ -1,43 +1,40 @@
-"""
-电商问数 Agent 状态定义
+"""电商问数 Agent 的 LangGraph 状态定义。
 
-State 是 LangGraph 各节点之间传递和更新的共享数据
-本章在用户原始问题之外，新增关键词列表和三路召回结果
-并把召回到的实体整理成后续提示词更容易消费的表信息和指标信息
-SQL 生成闭环会继续写入候选 SQL 以及校验错误信息，用于控制校正或执行分支
+设计原则：
+- State 只保存跨节点必须共享的原始结构化数据。
+- 能从其他字段推导出的子产物，不再重复写入 state。
+- 面向 prompt 的文本格式化在节点内按需完成，不放进 state。
 """
 
-from typing import NotRequired, TypedDict
+from typing import Literal, NotRequired, Required, TypedDict
 
 from app.entities.column_info import ColumnInfo
 from app.entities.metric_info import MetricInfo
 from app.entities.value_info import ValueInfo
 
 
-class MetricInfoState(TypedDict):
-    """面向 SQL 生成提示词的指标信息"""
+class MetricInfoState(TypedDict, total=False):
+    """SQL 生成可使用的指标上下文。"""
 
     name: str
     description: str
-    # 指标依赖的字段 id，用来提示模型不要脱离业务口径随意计算
     relevant_columns: list[str]
     alias: list[str]
 
 
-class ColumnInfoState(TypedDict):
-    """表上下文中的字段信息"""
+class ColumnInfoState(TypedDict, total=False):
+    """SQL 生成可使用的字段上下文。"""
 
     name: str
     type: str
     role: str
-    # 字段真实样例值，尤其用于辅助 where 条件里的枚举值选择
-    examples: list
     description: str
     alias: list[str]
+    examples: list
 
 
-class TableInfoState(TypedDict):
-    """SQL 生成阶段真正传给模型的表结构上下文"""
+class TableInfoState(TypedDict, total=False):
+    """SQL 生成可使用的表结构上下文。"""
 
     name: str
     role: str
@@ -46,7 +43,7 @@ class TableInfoState(TypedDict):
 
 
 class DateInfoState(TypedDict):
-    """SQL 生成阶段使用的当前日期上下文"""
+    """当前日期上下文。"""
 
     date: str
     weekday: str
@@ -54,14 +51,30 @@ class DateInfoState(TypedDict):
 
 
 class DBInfoState(TypedDict):
-    """SQL 生成阶段使用的数据库环境信息"""
+    """数据库方言和版本上下文。"""
 
     dialect: str
     version: str
 
 
-class MetricBindingState(TypedDict):
-    """Canonical metric resolved from user language and metric catalog."""
+class MessageState(TypedDict, total=False):
+    """会话历史中的原始消息。"""
+
+    role: str
+    content: str
+
+
+class SqlMemoryExampleState(TypedDict, total=False):
+    """历史成功 SQL 样例的原始结构。"""
+
+    rank: int
+    question: str
+    sql: str
+    similarity: float
+
+
+class MetricBindingState(TypedDict, total=False):
+    """用户指标表达解析出的 canonical 指标。"""
 
     raw_mention: str
     canonical_metric: str
@@ -71,8 +84,8 @@ class MetricBindingState(TypedDict):
     confidence: str
 
 
-class ResolvedFilterState(TypedDict):
-    """Canonical enum filter resolved from user language and value catalog."""
+class ResolvedFilterState(TypedDict, total=False):
+    """用户枚举值表达解析出的 canonical 筛选条件。"""
 
     raw_value: str
     canonical_value: str
@@ -82,8 +95,8 @@ class ResolvedFilterState(TypedDict):
     allowed_sql_literals: list[str]
 
 
-class GroupByBindingState(TypedDict):
-    """Canonical grouping dimension resolved from user language."""
+class GroupByBindingState(TypedDict, total=False):
+    """用户分组表达解析出的 canonical 维度。"""
 
     raw_mention: str
     column: str
@@ -93,7 +106,7 @@ class GroupByBindingState(TypedDict):
 
 
 class TimeBindingState(TypedDict, total=False):
-    """Structured time constraint resolved from user language."""
+    """用户时间表达解析出的结构化时间约束。"""
 
     raw_text: str
     grain: str
@@ -108,8 +121,8 @@ class TimeBindingState(TypedDict, total=False):
     required_columns: list[str]
 
 
-class BindingIssueState(TypedDict):
-    """Unresolved or ambiguous business object found during binding."""
+class BindingIssueState(TypedDict, total=False):
+    """业务绑定中未解析或存在歧义的对象。"""
 
     type: str
     raw_text: str
@@ -117,8 +130,12 @@ class BindingIssueState(TypedDict):
     candidate_column: str
 
 
-class BusinessBindingState(TypedDict):
-    """Single business binding object produced by business_binding."""
+class BusinessBindingState(TypedDict, total=False):
+    """业务绑定层产出的唯一 canonical 业务语义对象。
+
+    下游如需指标、筛选、分组、时间、未解析项，都从这个对象中读取，
+    不再在顶层 state 里保存 metric_bindings/resolved_filters 等展开字段。
+    """
 
     metrics: list[MetricBindingState]
     filters: list[ResolvedFilterState]
@@ -128,40 +145,85 @@ class BusinessBindingState(TypedDict):
     ambiguous: list[BindingIssueState]
 
 
-class DataAgentState(TypedDict):
-    """一次问数链路中的核心状态"""
+class RetrievalContextState(TypedDict, total=False):
+    """生产链路可消费的召回原始对象。"""
 
-    query: str  # 用户输入的查询
-    conversation_history: NotRequired[str]
-    sql_memory_context: NotRequired[str]
-    binding_candidates: NotRequired[dict]
-    keywords: list[str]  # 抽取的关键词
-    retrieved_column_infos: list[ColumnInfo]  # 检索到的字段信息
-    retrieved_metric_infos: list[MetricInfo]  # 检索到的指标信息
-    retrieved_value_infos: list[ValueInfo]  # 检索到的取值信息
+    columns: list[ColumnInfo]
+    metrics: list[MetricInfo]
+    values: list[ValueInfo]
 
-    table_infos: list[TableInfoState]  # 合并和补齐后的表结构上下文
-    metric_infos: list[MetricInfoState]  # 合并后的指标上下文
-    date_info: DateInfoState  # 当前日期 星期和季度信息
-    db_info: DBInfoState  # 数据库方言和版本信息
 
+class SqlContextState(TypedDict, total=False):
+    """SQL 生成和修正阶段使用的上下文。"""
+
+    tables: list[TableInfoState]
+    metrics: list[MetricInfoState]
+    date: DateInfoState
+    db: DBInfoState
+
+
+class TraceState(TypedDict, total=False):
+    """仅用于调试和评测的链路轨迹。"""
+
+    keywords: list[str]
+    retrieved_columns: list[str]
+    retrieved_metrics: list[str]
+    retrieved_values: list[str]
+    node_timings: list[dict]
+    sql_explanation: str
+    sql_correction_attempts: int
+
+
+class OutputState(TypedDict, total=False):
+    """最终返回给调用方的查询输出。"""
+
+    rows: list[dict]
+    analysis: str
+    meta: dict
+
+
+class FailureState(TypedDict, total=False):
+    """跨节点共享的最终失败状态。
+
+    SQL 纠错过程中的临时校验错误不写入这里；只有需要阻断链路或向调用方
+    报告的最终失败才进入 Graph State。
+    """
+
+    category: Required[
+        Literal[
+            "input_guard",
+            "business_binding",
+            "sql_validation",
+            "sql_execution",
+            "system",
+        ]
+    ]
+    stage: Required[str]
+    code: Required[str]
+    message: Required[str]
+    user_message: NotRequired[str]
+    disposition: Required[Literal["blocked", "failed"]]
+
+
+class DataAgentState(TypedDict, total=False):
+    """一次问数链路中的共享状态。"""
+
+    # 输入与会话上下文
+    query: Required[str]
+    conversation_messages: NotRequired[list[MessageState]]
+    sql_memory_examples: NotRequired[list[SqlMemoryExampleState]]
+
+    # 召回上下文与调试轨迹分开：生产节点读 retrieval_context，评测读 trace。
+    retrieval_context: RetrievalContextState
+    trace: TraceState
+
+    # SQL 生成上下文
+    sql_context: SqlContextState
     business_binding: BusinessBindingState
-    metric_bindings: list[MetricBindingState]
-    resolved_filters: list[ResolvedFilterState]
-    groupby_bindings: list[GroupByBindingState]
-    time_binding: TimeBindingState | None
-    validated_enum_values: list[str]
-    unresolved_bindings: list[BindingIssueState]
-    ambiguous_bindings: list[BindingIssueState]
 
-    sql: str  # 生成或校正后的SQL
-    sql_explanation: NotRequired[str]
-    final_answer: list[dict]  # SQL 执行结果，用于评测 trace 和最终返回
-    result_analysis: NotRequired[str]  # LLM 对执行结果的自然语言解读
+    # SQL 生成结果。SQL 执行结果统一放在 output。
+    sql: str
+    output: NotRequired[OutputState]
 
-    error: str  # 校验SQL时出现的错误信息
-    safety_error: str  # SQL 执行前安全/语义闸门错误信息
-    user_facing_message: NotRequired[str]
-    blocked_by: str  # 拦截请求的闸门节点名称
-    correction_attempts: int  # SQL 已修正次数
-    max_correction_attempts: int  # 单次查询允许的 SQL 最大修正次数
+    # 最终失败统一收口；节点内部可修复的临时错误不写入 Graph State。
+    failure: NotRequired[FailureState | None]

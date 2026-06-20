@@ -242,7 +242,7 @@ def test_memory_context_formatting_is_compact():
                 "统计华北 GMV",
                 {
                     "sql": "select sum(order_amount) as GMV from fact_order",
-                    "final_answer": [{"GMV": 100}],
+                    "output": {"rows": [{"GMV": 100}]},
                     "business_binding": {"metrics": [{"canonical_metric": "GMV"}]},
                 },
             ),
@@ -264,9 +264,8 @@ def test_build_sql_tool_memory_requires_successful_sql_result():
             "统计 GMV",
             {
                 "sql": "select 1",
-                "final_answer": [{"GMV": 1}],
-                "blocked_by": None,
-                "business_binding": {"metrics": [{"canonical_metric": "GMV"}]},
+                "output": {"rows": [{"GMV": 1}]},
+                    "business_binding": {"metrics": [{"canonical_metric": "GMV"}]},
             },
         )
         is not None
@@ -276,9 +275,8 @@ def test_build_sql_tool_memory_requires_successful_sql_result():
             "统计 GMV",
             {
                 "sql": "select 1",
-                "final_answer": [],
-                "blocked_by": None,
-                "business_binding": {"metrics": [{"canonical_metric": "GMV"}]},
+                "output": {"rows": []},
+                    "business_binding": {"metrics": [{"canonical_metric": "GMV"}]},
             },
         )
         is None
@@ -288,9 +286,15 @@ def test_build_sql_tool_memory_requires_successful_sql_result():
             "统计 GMV",
             {
                 "sql": "select 1",
-                "final_answer": [{"GMV": 1}],
-                "blocked_by": "guard",
-                "business_binding": {"metrics": [{"canonical_metric": "GMV"}]},
+                "output": {"rows": [{"GMV": 1}]},
+                    "failure": {
+                        "category": "input_guard",
+                        "stage": "pre_rag_guard",
+                        "code": "blocked",
+                        "message": "blocked",
+                        "disposition": "blocked",
+                    },
+                    "business_binding": {"metrics": [{"canonical_metric": "GMV"}]},
             },
         )
         is None
@@ -300,9 +304,15 @@ def test_build_sql_tool_memory_requires_successful_sql_result():
             "统计 GMV",
             {
                 "sql": "select 1",
-                "final_answer": [{"GMV": 1}],
-                "safety_error": "blocked",
-                "business_binding": {"metrics": [{"canonical_metric": "GMV"}]},
+                "output": {"rows": [{"GMV": 1}]},
+                    "failure": {
+                        "category": "sql_validation",
+                        "stage": "sql_executor",
+                        "code": "blocked",
+                        "message": "blocked",
+                        "disposition": "blocked",
+                    },
+                    "business_binding": {"metrics": [{"canonical_metric": "GMV"}]},
             },
         )
         is None
@@ -311,7 +321,7 @@ def test_build_sql_tool_memory_requires_successful_sql_result():
     assert (
         build_sql_tool_memory(
             "统计 GMV",
-            {"sql": "select 1", "final_answer": [{"GMV": 1}]},
+            {"sql": "select 1", "output": {"rows": [{"GMV": 1}]}},
         )
         is None
     )
@@ -322,7 +332,7 @@ def test_sql_tool_memory_does_not_store_result_preview():
         "统计华北 GMV",
         {
             "sql": "select sum(order_amount) as GMV from fact_order",
-            "final_answer": [{"GMV": 100, "customer_phone": "13800000000"}],
+            "output": {"rows": [{"GMV": 100, "customer_phone": "13800000000"}]},
             "business_binding": {"metrics": [{"canonical_metric": "GMV"}]},
         },
     )
@@ -348,10 +358,12 @@ def test_assistant_message_stores_summary_not_result_json():
     content = _assistant_message(
         {
             "sql": "select customer_phone, order_amount from fact_order",
-            "final_answer": [
-                {"customer_phone": "13800000000", "order_amount": 100},
-                {"customer_phone": "13900000000", "order_amount": 200},
-            ],
+            "output": {
+                "rows": [
+                    {"customer_phone": "13800000000", "order_amount": 100},
+                    {"customer_phone": "13900000000", "order_amount": 200},
+                ]
+            },
         }
     )
 
@@ -362,8 +374,13 @@ def test_assistant_message_stores_summary_not_result_json():
 def test_assistant_message_uses_generic_error_without_llm_message():
     content = _assistant_message(
         {
-            "safety_error": "business_binding unresolved: metric=订单, reason=metric_not_bound",
-            "blocked_by": "business_binding",
+            "failure": {
+                "category": "business_binding",
+                "stage": "business_binding",
+                "code": "metric_not_bound",
+                "message": "business_binding unresolved: metric=订单, reason=metric_not_bound",
+                "disposition": "blocked",
+            },
         }
     )
 
@@ -375,8 +392,14 @@ def test_assistant_message_uses_generic_error_without_llm_message():
 def test_assistant_message_prefers_llm_user_facing_message():
     content = _assistant_message(
         {
-            "safety_error": "business_binding unresolved: metric=订单, reason=metric_not_bound",
-            "user_facing_message": "订单数这个指标还没配置；销售额可以先查。你可以直接回复先查销售额。",
+            "failure": {
+                "category": "business_binding",
+                "stage": "business_binding",
+                "code": "metric_not_bound",
+                "message": "business_binding unresolved: metric=订单, reason=metric_not_bound",
+                "user_message": "订单数这个指标还没配置；销售额可以先查。你可以直接回复先查销售额。",
+                "disposition": "blocked",
+            },
         }
     )
 
@@ -386,18 +409,25 @@ def test_assistant_message_prefers_llm_user_facing_message():
 def test_assistant_message_does_not_generate_rule_copy_from_bound_metrics():
     content = _assistant_message(
         {
-            "safety_error": "business_binding unresolved: metric=订单, reason=metric_not_bound",
-            "blocked_by": "business_binding",
-            "metric_bindings": [
-                {
-                    "raw_mention": "销售额",
-                    "canonical_metric": "GMV",
-                    "matched_by": "metric_alias",
-                    "evidence": "GMV.alias contains 销售额",
-                    "relevant_columns": ["fact_order.order_amount"],
-                    "confidence": "high",
-                }
-            ],
+            "failure": {
+                "category": "business_binding",
+                "stage": "business_binding",
+                "code": "metric_not_bound",
+                "message": "business_binding unresolved: metric=订单, reason=metric_not_bound",
+                "disposition": "blocked",
+            },
+            "business_binding": {
+                "metrics": [
+                    {
+                        "raw_mention": "销售额",
+                        "canonical_metric": "GMV",
+                        "matched_by": "metric_alias",
+                        "evidence": "GMV.alias contains 销售额",
+                        "relevant_columns": ["fact_order.order_amount"],
+                        "confidence": "high",
+                    }
+                ]
+            },
         }
     )
 
@@ -430,7 +460,7 @@ def test_anonymous_user_does_not_write_long_term_sql_memory():
             metadata_cache_version="meta-v1",
             final_state={
                 "sql": "select 1 as GMV",
-                "final_answer": [{"GMV": 1}],
+                "output": {"rows": [{"GMV": 1}]},
                 "business_binding": {"metrics": [{"canonical_metric": "GMV"}]},
             },
         )

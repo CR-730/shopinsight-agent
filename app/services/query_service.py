@@ -8,13 +8,12 @@ import asyncio
 import json
 import uuid
 from collections.abc import AsyncIterator
-from types import SimpleNamespace
 
 from langchain_core.embeddings import Embeddings
 
-from app.agent.business_binding.candidates import extract_binding_candidates
 from app.agent.context import DataAgentContext
 from app.agent.cost import CostRates, CostTracker
+from app.agent.failure import build_failure
 from app.agent.graph import graph
 from app.agent.llm_usage import (
     reset_llm_cache_context_namespace,
@@ -26,11 +25,9 @@ from app.agent.memory import (
     Message,
     build_retrieval_query,
     build_sql_tool_memory,
-    format_conversation_history,
-    sliding_conversation_history,
+    messages_to_state,
 )
 from app.agent.state import DataAgentState
-from app.agent.stop_signal import split_stop_signal
 from app.conf.app_config import app_config
 from app.repositories.es.value_es_repository import ValueESRepository
 from app.repositories.mysql.dw.dw_mysql_repository import DWMySQLRepository
@@ -93,8 +90,8 @@ class QueryService:
             conversation_id=conversation_id,
             user_id=user_id,
         )
-        conversation_history = format_conversation_history(conversation.messages)
-        memory_query = build_retrieval_query(query, conversation_history)
+        conversation_messages = messages_to_state(conversation.messages)
+        memory_query = build_retrieval_query(query, conversation_messages)
 
         yield _sse(
             {
@@ -108,9 +105,7 @@ class QueryService:
 
         state = DataAgentState(
             query=query,
-            conversation_history=conversation_history,
-            correction_attempts=0,
-            max_correction_attempts=app_config.agent.max_sql_correction_attempts,
+            conversation_messages=conversation_messages,
         )
         metadata_build_version = await self.meta_mysql_repository.get_active_build_version()
         metadata_cache_version = await self.meta_mysql_repository.get_metadata_cache_version()
@@ -138,54 +133,6 @@ class QueryService:
         assistant_text_parts: list[str] = []
 
         try:
-            yield _sse({"type": "progress", "step": "理解问题", "status": "running"})
-            # 这一轮候选抽取故意不做元数据裁决，只负责给前端尽早返回
-            # “理解了什么”和原始业务对象候选；真正能否用于 SQL，仍由
-            # graph 里的 business_binding 基于召回元数据再次校验。
-            binding_candidates = await extract_binding_candidates(
-                query,
-                SimpleNamespace(context=context),
-                conversation_history=sliding_conversation_history(conversation_history),
-                metric_infos=[],
-                retrieved_value_infos=[],
-                enum_aliases={},
-            )
-            state["binding_candidates"] = binding_candidates.model_dump()
-            user_response, should_stop = split_stop_signal(
-                binding_candidates.user_response
-            )
-            async for delta_event in _answer_delta_stream(user_response):
-                assistant_text_parts.append(delta_event["delta"])
-                yield _sse(delta_event)
-            if should_stop:
-                final_state = {
-                    "safety_error": binding_candidates.user_response,
-                    "blocked_by": "binding_candidate_extractor",
-                    "user_facing_message": user_response,
-                }
-                yield _sse(
-                    {
-                        "type": "progress",
-                        "step": "理解问题",
-                        "status": "blocked",
-                    }
-                )
-                yield _sse({"type": "answer_done"})
-                await self._save_memory_after_query(
-                    conversation=conversation,
-                    query=query,
-                    memory_query=memory_query,
-                    metadata_cache_version=metadata_cache_version,
-                    final_state=final_state,
-                    assistant_content="".join(assistant_text_parts).strip(),
-                )
-                if include_trace:
-                    yield _sse({"type": "trace", "data": final_state})
-                yield _sse({"type": "usage", "data": cost_tracker.summary()})
-                return
-            yield _sse({"type": "progress", "step": "理解问题", "status": "success"})
-            yield _sse({"type": "progress", "step": "检索上下文", "status": "running"})
-
             async for event in graph.astream_events(
                 input=state,
                 context=context,
@@ -239,7 +186,15 @@ class QueryService:
                 query=query,
                 memory_query=memory_query,
                 metadata_cache_version=metadata_cache_version,
-                final_state={"error": str(e)},
+                final_state={
+                    "failure": build_failure(
+                        category="system",
+                        stage="query_service",
+                        code=e.__class__.__name__,
+                        message=str(e),
+                        disposition="failed",
+                    )
+                },
                 assistant_content="",
             )
             yield _sse({"type": "usage", "data": cost_tracker.summary()})
@@ -346,53 +301,52 @@ def _split_text(text: str, size: int = 8) -> list[str]:
 
 
 def _assistant_message(final_state: dict) -> str:
-    final_answer = final_state.get("final_answer")
-    result_meta = final_state.get("result_meta") or {}
+    output = final_state.get("output") or {}
+    rows = output.get("rows")
+    result_meta = output.get("meta") or {}
     tables = result_meta.get("tables") or _table_names(final_state)
     table_text = f"，涉及表：{', '.join(tables[:5])}" if tables else ""
 
-    if isinstance(final_answer, list):
-        if final_answer:
+    if isinstance(rows, list):
+        if rows:
             columns = (
-                list(final_answer[0].keys())
-                if isinstance(final_answer[0], dict)
+                list(rows[0].keys())
+                if isinstance(rows[0], dict)
                 else []
             )
             field_text = f"，字段：{', '.join(columns[:8])}" if columns else ""
-            return f"查询完成，共返回 {len(final_answer)} 行结果{table_text}{field_text}。"
+            return f"查询完成，共返回 {len(rows)} 行结果{table_text}{field_text}。"
         return "查询完成，结果为空。可以换一个口径或时间范围继续追问。"
 
-    safety_error = str(final_state.get("safety_error") or "").strip()
-    if safety_error:
-        user_facing_message = str(final_state.get("user_facing_message") or "").strip()
-        if user_facing_message:
-            return user_facing_message
-        return ASSISTANT_ERROR_MESSAGE
-
-    error = str(final_state.get("error") or "").strip()
-    if error:
+    failure = final_state.get("failure")
+    if isinstance(failure, dict):
+        user_message = str(failure.get("user_message") or "").strip()
+        if user_message:
+            return user_message
         return ASSISTANT_ERROR_MESSAGE
 
     return "流程已结束，但没有返回可展示的查询结果。"
 
 
 def _should_emit_error_event(final_state: dict) -> bool:
-    if isinstance(final_state.get("final_answer"), list):
+    output = final_state.get("output") or {}
+    if isinstance(output.get("rows"), list):
         return False
-    if str(final_state.get("user_facing_message") or "").strip():
+    failure = final_state.get("failure")
+    if not isinstance(failure, dict):
         return False
-    return bool(
-        str(final_state.get("safety_error") or "").strip()
-        or str(final_state.get("error") or "").strip()
-    )
+    if str(failure.get("user_message") or "").strip():
+        return False
+    return True
 
 
 def _assistant_metadata(final_state: dict) -> dict:
     metadata: dict = {}
-    final_answer = final_state.get("final_answer")
-    if isinstance(final_answer, list):
-        metadata["result"] = final_answer
-    result_meta = final_state.get("result_meta")
+    output = final_state.get("output") or {}
+    rows = output.get("rows")
+    if isinstance(rows, list):
+        metadata["result"] = rows
+    result_meta = output.get("meta")
     if isinstance(result_meta, dict):
         metadata["result_meta"] = result_meta
     sql = str(final_state.get("sql") or "").strip()
@@ -403,7 +357,7 @@ def _assistant_metadata(final_state: dict) -> dict:
 
 def _table_names(final_state: dict) -> list[str]:
     names = []
-    for table in final_state.get("table_infos") or []:
+    for table in (final_state.get("sql_context") or {}).get("tables") or []:
         name = str(table.get("name") or "").strip()
         if name and name not in names:
             names.append(name)

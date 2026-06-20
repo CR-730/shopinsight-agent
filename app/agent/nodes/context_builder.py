@@ -26,11 +26,9 @@ async def context_builder(state: DataAgentState, runtime: Runtime[DataAgentConte
         current_state, runtime.context
     )
     current_state.update(sql_memory_update)
-    accumulated_update.update(sql_memory_update)
 
     keyword_update = await extract_retrieval_keywords(current_state)
     current_state.update(keyword_update)
-    accumulated_update.update(keyword_update)
 
     column_update, value_update, metric_update = await asyncio.gather(
         recall_column_context(current_state, runtime.context),
@@ -40,10 +38,49 @@ async def context_builder(state: DataAgentState, runtime: Runtime[DataAgentConte
     current_state.update(column_update)
     current_state.update(value_update)
     current_state.update(metric_update)
-    accumulated_update.update(column_update)
-    accumulated_update.update(value_update)
-    accumulated_update.update(metric_update)
 
     merge_update = await merge_retrieved_context(current_state, runtime.context)
-    accumulated_update.update(merge_update)
+    current_state.update(merge_update)
+    accumulated_update.update(
+        {
+            "sql_memory_examples": sql_memory_update.get("sql_memory_examples") or [],
+            "retrieval_context": {
+                "columns": column_update.get("retrieved_column_infos") or [],
+                "metrics": metric_update.get("retrieved_metric_infos") or [],
+                "values": value_update.get("retrieved_value_infos") or [],
+            },
+            "sql_context": {
+                "tables": merge_update.get("table_infos") or [],
+                "metrics": merge_update.get("metric_infos") or [],
+            },
+            "trace": {
+                "keywords": keyword_update.get("keywords") or [],
+                "retrieved_columns": _entity_ids(
+                    column_update.get("retrieved_column_infos") or []
+                ),
+                "retrieved_metrics": _metric_names(
+                    metric_update.get("retrieved_metric_infos") or []
+                ),
+                "retrieved_values": _entity_ids(
+                    value_update.get("retrieved_value_infos") or []
+                ),
+            },
+        }
+    )
     return accumulated_update
+
+
+def _entity_ids(items) -> list[str]:
+    return [
+        str(getattr(item, "id", item))
+        for item in items
+        if str(getattr(item, "id", item))
+    ]
+
+
+def _metric_names(items) -> list[str]:
+    return [
+        str(getattr(item, "name", item))
+        for item in items
+        if str(getattr(item, "name", item))
+    ]

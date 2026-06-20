@@ -2,15 +2,43 @@
 from types import SimpleNamespace
 
 from app.agent import context_compaction as context_compaction_helpers
+from app.agent.node_observer import traced_node
 from app.agent.nodes import context_builder as context_builder_module
 from app.agent.nodes import context_compaction as context_compaction_module
 from app.agent.nodes import sql_executor as sql_executor_module
 from app.entities.column_info import ColumnInfo
 
 
-def test_context_builder_returns_all_inner_updates(monkeypatch):
+def test_traced_node_appends_timing_without_losing_trace():
+    async def node(state, runtime):
+        return {"trace": {"keywords": ["GMV"]}}
+
+    result = asyncio.run(
+        traced_node("context_builder", node)(
+            {"trace": {"node_timings": [{"step": "pre_rag_guard"}]}},
+            SimpleNamespace(context={}),
+        )
+    )
+
+    assert result["trace"]["keywords"] == ["GMV"]
+    assert [item["step"] for item in result["trace"]["node_timings"]] == [
+        "pre_rag_guard",
+        "context_builder",
+    ]
+
+
+def test_context_builder_returns_structured_context_and_trace(monkeypatch):
     async def fake_recall_sql_memory_context(state, context):
-        return {"sql_memory_context": "historical SQL"}
+        return {
+            "sql_memory_examples": [
+                {
+                    "rank": 1,
+                    "question": "历史问题",
+                    "sql": "select 1",
+                    "similarity": 0.9,
+                }
+            ]
+        }
 
     async def fake_extract_retrieval_keywords(state):
         return {"keywords": ["GMV"]}
@@ -25,35 +53,19 @@ def test_context_builder_returns_all_inner_updates(monkeypatch):
         return {"retrieved_metric_infos": ["metric"]}
 
     async def fake_merge_retrieved_context(state, context):
-        assert state["sql_memory_context"] == "historical SQL"
+        assert state["sql_memory_examples"][0]["sql"] == "select 1"
         assert state["keywords"] == ["GMV"]
         assert state["retrieved_column_infos"] == ["column"]
         assert state["retrieved_value_infos"] == ["value"]
         assert state["retrieved_metric_infos"] == ["metric"]
         return {"table_infos": ["table"], "metric_infos": ["metric_info"]}
 
-    monkeypatch.setattr(
-        context_builder_module,
-        "recall_sql_memory_context",
-        fake_recall_sql_memory_context,
-    )
-    monkeypatch.setattr(
-        context_builder_module,
-        "extract_retrieval_keywords",
-        fake_extract_retrieval_keywords,
-    )
-    monkeypatch.setattr(
-        context_builder_module, "recall_column_context", fake_recall_column_context
-    )
-    monkeypatch.setattr(
-        context_builder_module, "recall_value_context", fake_recall_value_context
-    )
-    monkeypatch.setattr(
-        context_builder_module, "recall_metric_context", fake_recall_metric_context
-    )
-    monkeypatch.setattr(
-        context_builder_module, "merge_retrieved_context", fake_merge_retrieved_context
-    )
+    monkeypatch.setattr(context_builder_module, "recall_sql_memory_context", fake_recall_sql_memory_context)
+    monkeypatch.setattr(context_builder_module, "extract_retrieval_keywords", fake_extract_retrieval_keywords)
+    monkeypatch.setattr(context_builder_module, "recall_column_context", fake_recall_column_context)
+    monkeypatch.setattr(context_builder_module, "recall_value_context", fake_recall_value_context)
+    monkeypatch.setattr(context_builder_module, "recall_metric_context", fake_recall_metric_context)
+    monkeypatch.setattr(context_builder_module, "merge_retrieved_context", fake_merge_retrieved_context)
 
     result = asyncio.run(
         context_builder_module.context_builder(
@@ -62,55 +74,61 @@ def test_context_builder_returns_all_inner_updates(monkeypatch):
     )
 
     assert result == {
-        "sql_memory_context": "historical SQL",
-        "keywords": ["GMV"],
-        "retrieved_column_infos": ["column"],
-        "retrieved_value_infos": ["value"],
-        "retrieved_metric_infos": ["metric"],
-        "table_infos": ["table"],
-        "metric_infos": ["metric_info"],
+        "sql_memory_examples": [
+            {
+                "rank": 1,
+                "question": "历史问题",
+                "sql": "select 1",
+                "similarity": 0.9,
+            }
+        ],
+        "retrieval_context": {"columns": ["column"], "metrics": ["metric"], "values": ["value"]},
+        "sql_context": {"tables": ["table"], "metrics": ["metric_info"]},
+        "trace": {
+            "keywords": ["GMV"],
+            "retrieved_columns": ["column"],
+            "retrieved_metrics": ["metric"],
+            "retrieved_values": ["value"],
+        },
     }
 
-def test_context_compaction_returns_all_inner_updates(monkeypatch):
+
+def test_context_compaction_returns_sql_context(monkeypatch):
     async def fake_filter_table_context(state, context):
-        assert state["table_infos"] == ["raw_table"]
+        assert state["sql_context"]["tables"] == ["raw_table"]
         assert context == {"dw_mysql_repository": "repo"}
         return {"table_infos": ["filtered_table"]}
 
     def fake_filter_metric_context(state):
-        assert state["table_infos"] == ["filtered_table"]
+        assert state["sql_context"]["tables"] == ["filtered_table"]
         return {"metric_infos": ["filtered_metric"]}
 
     async def fake_add_runtime_context(state, context):
-        assert state["metric_infos"] == ["filtered_metric"]
+        assert state["sql_context"]["metrics"] == ["filtered_metric"]
         assert context == {"dw_mysql_repository": "repo"}
         return {
             "date_info": {"date": "2026-06-03", "weekday": "Wednesday", "quarter": "Q2"},
             "db_info": {"dialect": "mysql", "version": "8.0"},
         }
 
-    monkeypatch.setattr(
-        context_compaction_module, "filter_table_context", fake_filter_table_context
-    )
-    monkeypatch.setattr(
-        context_compaction_module, "filter_metric_context", fake_filter_metric_context
-    )
-    monkeypatch.setattr(
-        context_compaction_module, "add_runtime_context", fake_add_runtime_context
-    )
+    monkeypatch.setattr(context_compaction_module, "filter_table_context", fake_filter_table_context)
+    monkeypatch.setattr(context_compaction_module, "filter_metric_context", fake_filter_metric_context)
+    monkeypatch.setattr(context_compaction_module, "add_runtime_context", fake_add_runtime_context)
 
     result = asyncio.run(
         context_compaction_module.context_compaction(
-            {"query": "统计 GMV", "table_infos": ["raw_table"]},
+            {"query": "统计 GMV", "sql_context": {"tables": ["raw_table"]}},
             SimpleNamespace(context={"dw_mysql_repository": "repo"}),
         )
     )
 
     assert result == {
-        "table_infos": ["filtered_table"],
-        "metric_infos": ["filtered_metric"],
-        "date_info": {"date": "2026-06-03", "weekday": "Wednesday", "quarter": "Q2"},
-        "db_info": {"dialect": "mysql", "version": "8.0"},
+        "sql_context": {
+            "tables": ["filtered_table"],
+            "metrics": ["filtered_metric"],
+            "date": {"date": "2026-06-03", "weekday": "Wednesday", "quarter": "Q2"},
+            "db": {"dialect": "mysql", "version": "8.0"},
+        }
     }
 
 
@@ -152,26 +170,28 @@ def test_filter_table_context_adds_missing_protected_columns_from_metadata(monke
                         ]
                     }
                 },
-                "table_infos": [
-                    {
-                        "name": "dim_date",
-                        "role": "dimension",
-                        "columns": [
-                            {
-                                "name": "date_id",
-                                "role": "primary_key",
-                                "alias": ["日期ID"],
-                                "examples": [20250101],
-                            },
-                            {
-                                "name": "quarter",
-                                "role": "dimension",
-                                "alias": ["季度"],
-                                "examples": ["Q1"],
-                            },
-                        ],
-                    }
-                ],
+                "sql_context": {
+                    "tables": [
+                        {
+                            "name": "dim_date",
+                            "role": "dimension",
+                            "columns": [
+                                {
+                                    "name": "date_id",
+                                    "role": "primary_key",
+                                    "alias": ["日期ID"],
+                                    "examples": [20250101],
+                                },
+                                {
+                                    "name": "quarter",
+                                    "role": "dimension",
+                                    "alias": ["季度"],
+                                    "examples": ["Q1"],
+                                },
+                            ],
+                        }
+                    ]
+                },
             },
             {
                 "cost_tracker": None,
@@ -192,20 +212,25 @@ def test_sql_executor_returns_corrected_sql_and_execution_state(monkeypatch):
         if len(calls) == 1:
             return {
                 "sql": "select bad",
-                "error": "Unknown column",
-                "safety_error": None,
+                "status": "repairable_error",
+                "validation_error": "Unknown column",
             }
-        return {"sql": "select corrected", "error": None, "safety_error": None}
+        return {"sql": "select corrected", "status": "pass", "validation_error": None}
 
-    async def fake_correct_sql_candidate(state, context):
+    async def fake_correct_sql_candidate(
+        state, context, validation_error, *, correction_attempts, max_correction_attempts
+    ):
         assert state["sql"] == "select bad"
+        assert validation_error == "Unknown column"
         assert context["dw_mysql_repository"] == "repo"
-        return {"sql": "select corrected", "correction_attempts": 1}
+        assert correction_attempts == 0
+        assert max_correction_attempts == 2
+        return {"sql": "select corrected", "attempts": 1}
 
     async def fake_execute_sql(state, executor, writer, runtime):
         assert state["sql"] == "select corrected"
         assert runtime.context["dw_mysql_repository"] == "repo"
-        return {"final_answer": [{"GMV": 100}]}
+        return {"output": {"rows": [{"GMV": 100}]}}
 
     monkeypatch.setattr(sql_executor_module, "_pre_validate_sql", fake_pre_validate_sql)
     monkeypatch.setattr(
@@ -218,7 +243,6 @@ def test_sql_executor_returns_corrected_sql_and_execution_state(monkeypatch):
             {
                 "query": "统计 GMV",
                 "sql": "select bad",
-                "max_correction_attempts": 2,
             },
             SimpleNamespace(
                 context={"dw_mysql_repository": "repo"},
@@ -228,23 +252,28 @@ def test_sql_executor_returns_corrected_sql_and_execution_state(monkeypatch):
     )
 
     assert result["sql"] == "select corrected"
-    assert result["error"] is None
-    assert result["safety_error"] is None
-    assert result["correction_attempts"] == 1
-    assert result["final_answer"] == [{"GMV": 100}]
+    assert result["failure"] is None
+    assert result["trace"]["sql_correction_attempts"] == 1
+    assert result["output"]["rows"] == [{"GMV": 100}]
     assert calls == [("validate", "select bad"), ("validate", "select corrected")]
 
 
 def test_sql_executor_returns_failed_correction_state(monkeypatch):
     async def fake_pre_validate_sql(state, executor):
-        return {"sql": state["sql"], "error": "Unknown column", "safety_error": None}
+        return {
+            "sql": state["sql"],
+            "status": "repairable_error",
+            "validation_error": "Unknown column",
+        }
 
-    def fake_fail_sql_correction(state):
-        return {"blocked_by": "sql_correction", "error": state["error"]}
+    async def fake_correct_sql_candidate(
+        state, context, validation_error, *, correction_attempts, max_correction_attempts
+    ):
+        return {"sql": state["sql"], "attempts": correction_attempts + 1}
 
     monkeypatch.setattr(sql_executor_module, "_pre_validate_sql", fake_pre_validate_sql)
     monkeypatch.setattr(
-        sql_executor_module, "_fail_sql_correction", fake_fail_sql_correction
+        sql_executor_module, "correct_sql_candidate", fake_correct_sql_candidate
     )
 
     result = asyncio.run(
@@ -252,8 +281,6 @@ def test_sql_executor_returns_failed_correction_state(monkeypatch):
             {
                 "query": "统计 GMV",
                 "sql": "select bad",
-                "correction_attempts": 2,
-                "max_correction_attempts": 2,
             },
             SimpleNamespace(
                 context={"dw_mysql_repository": "repo"},
@@ -263,8 +290,13 @@ def test_sql_executor_returns_failed_correction_state(monkeypatch):
     )
 
     assert result["sql"] == "select bad"
-    assert result["error"] == "Unknown column"
-    assert result["blocked_by"] == "sql_correction"
+    assert result["failure"] == {
+        "category": "sql_validation",
+        "stage": "sql_correction",
+        "code": "correction_exhausted",
+        "message": "Unknown column",
+        "disposition": "failed",
+    }
 
 
 def test_sql_executor_has_internal_loop_limit(monkeypatch):
@@ -274,9 +306,15 @@ def test_sql_executor_has_internal_loop_limit(monkeypatch):
     async def fake_pre_validate_sql(state, executor):
         nonlocal validations
         validations += 1
-        return {"sql": state["sql"], "error": "Unknown column", "safety_error": None}
+        return {
+            "sql": state["sql"],
+            "status": "repairable_error",
+            "validation_error": "Unknown column",
+        }
 
-    async def fake_correct_sql_candidate(state, context):
+    async def fake_correct_sql_candidate(
+        state, context, validation_error, *, correction_attempts, max_correction_attempts
+    ):
         nonlocal corrections
         corrections += 1
         return {"sql": state["sql"]}
@@ -291,7 +329,6 @@ def test_sql_executor_has_internal_loop_limit(monkeypatch):
             {
                 "query": "统计 GMV",
                 "sql": "select bad",
-                "max_correction_attempts": 2,
             },
             SimpleNamespace(
                 context={"dw_mysql_repository": "repo"},
@@ -301,6 +338,6 @@ def test_sql_executor_has_internal_loop_limit(monkeypatch):
     )
 
     assert validations == 3
-    assert corrections == 3
-    assert result["error"] == "SQL executor exceeded internal correction loop limit"
-    assert result["blocked_by"] == "sql_executor"
+    assert corrections == 2
+    assert result["failure"]["code"] == "correction_exhausted"
+    assert result["failure"]["message"] == "Unknown column"

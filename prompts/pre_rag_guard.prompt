@@ -27,6 +27,14 @@
 - attack_type 为 none。
 - risk_level 为 low。
 - reason 简短说明可以进入问数流程，不要追加 find_error。
+- user_response 用第一人称简短复述你对用户问题的理解，说明会按哪些业务对象继续分析，控制在 60 字以内。
+- user_response 不能承诺具体指标、字段或枚举值一定存在，不能说已经完成查询。
+
+user_response 示例：
+- 用户问题：按会员等级看订单和销售额
+  user_response：我将按会员等级分组，统计订单和销售额相关经营数据。
+- 用户问题：华东一季度各品类 GMV
+  user_response：我将围绕华东地区、一季度、品类和 GMV 继续分析。
 
 禁止事项：
 - 禁止生成 SQL。

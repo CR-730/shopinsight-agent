@@ -20,15 +20,23 @@ async def context_compaction(
     accumulated_update = {}
 
     table_update = await filter_table_context(current_state, runtime.context)
-    current_state.update(table_update)
-    accumulated_update.update(table_update)
+    current_state["sql_context"] = {
+        **(current_state.get("sql_context") or {}),
+        "tables": table_update.get("table_infos") or [],
+    }
 
     metric_update = filter_metric_context(current_state)
-    current_state.update(metric_update)
-    accumulated_update.update(metric_update)
+    current_state["sql_context"] = {
+        **(current_state.get("sql_context") or {}),
+        "metrics": metric_update.get("metric_infos") or [],
+    }
 
     extra_context_update = await add_runtime_context(current_state, runtime.context)
-    current_state.update(extra_context_update)
-    accumulated_update.update(extra_context_update)
+    current_state["sql_context"] = {
+        **(current_state.get("sql_context") or {}),
+        "date": extra_context_update.get("date_info"),
+        "db": extra_context_update.get("db_info"),
+    }
+    accumulated_update["sql_context"] = current_state["sql_context"]
 
     return accumulated_update

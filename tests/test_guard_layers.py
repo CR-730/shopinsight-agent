@@ -1,11 +1,11 @@
 ﻿import asyncio
 
-from app.agent.nodes import pre_rag_guard as pre_rag_guard_module
+from app.agent.nodes import intent_recognition as intent_recognition_module
 from app.agent.nodes.business_binding import validate_business_binding_state
-from app.agent.nodes.pre_rag_guard import (
+from app.agent.nodes.intent_recognition import (
     _should_block_classifier_result,
     classify_query_intent,
-    pre_rag_guard,
+    intent_recognition,
 )
 from app.agent.sql.sql_guard import (
     normalize_sql_for_execution,
@@ -25,7 +25,7 @@ def test_split_stop_signal_strips_marker_from_user_visible_text():
     assert should_stop is True
 
 
-def test_pre_rag_guard_blocks_when_classifier_fails():
+def test_intent_recognition_blocks_when_classifier_fails():
     assert (
         _should_block_classifier_result(
             {
@@ -39,14 +39,14 @@ def test_pre_rag_guard_blocks_when_classifier_fails():
     )
 
 
-def test_pre_rag_guard_classifier_failure_returns_block_decision(monkeypatch):
+def test_intent_recognition_classifier_failure_returns_block_decision(monkeypatch):
     async def fail_llm(*args, **kwargs):
         raise TimeoutError("classifier timeout")
 
     class Runtime:
         context = {"cost_tracker": None}
 
-    monkeypatch.setattr(pre_rag_guard_module, "ainvoke_llm_with_usage", fail_llm)
+    monkeypatch.setattr(intent_recognition_module, "ainvoke_llm_with_usage", fail_llm)
 
     result = asyncio.run(classify_query_intent("统计销售额", Runtime()))
 
@@ -54,7 +54,7 @@ def test_pre_rag_guard_classifier_failure_returns_block_decision(monkeypatch):
     assert result["attack_type"] == "classifier_error"
 
 
-def test_pre_rag_guard_streams_llm_text_without_stop_marker(monkeypatch):
+def test_intent_recognition_streams_llm_text_without_stop_marker(monkeypatch):
     events = []
 
     class Runtime:
@@ -71,29 +71,65 @@ def test_pre_rag_guard_streams_llm_text_without_stop_marker(monkeypatch):
         }
 
     monkeypatch.setattr(
-        pre_rag_guard_module,
+        intent_recognition_module,
         "classify_query_intent",
         fake_classify_query_intent,
     )
 
-    result = asyncio.run(pre_rag_guard({"query": "今天天气怎么样"}, Runtime()))
+    result = asyncio.run(intent_recognition({"query": "今天天气怎么样"}, Runtime()))
     text = "".join(event.get("delta", "") for event in events)
 
-    assert result["blocked_by"] == "pre_rag_guard"
-    assert result["user_facing_message"] == "我理解你是在问天气，但我只能处理电商经营数据查询。"
+    failure = result["failure"]
+    assert failure["stage"] == "intent_recognition"
+    assert failure["disposition"] == "blocked"
+    assert failure["user_message"] == "我理解你是在问天气，但我只能处理电商经营数据查询。"
     assert "find_error" not in text
+
+
+def test_intent_recognition_reports_intent_recognition_step(monkeypatch):
+    events = []
+
+    class Runtime:
+        stream_writer = staticmethod(events.append)
+        context = {"cost_tracker": None}
+
+    async def fake_classify_query_intent(query, runtime):
+        return {
+            "is_prompt_injection": False,
+            "attack_type": "none",
+            "risk_level": "low",
+            "should_block": False,
+            "reason": "",
+            "user_response": "我将统计销售额相关经营数据。",
+        }
+
+    monkeypatch.setattr(
+        intent_recognition_module,
+        "classify_query_intent",
+        fake_classify_query_intent,
+    )
+
+    result = asyncio.run(intent_recognition({"query": "统计销售额"}, Runtime()))
+    text = "".join(event.get("delta", "") for event in events)
+
+    assert result == {"failure": None}
+    assert events[0] == {"type": "progress", "step": "意图识别", "status": "running"}
+    assert events[-1] == {"type": "progress", "step": "意图识别", "status": "success"}
+    assert "我将统计销售额相关经营数据。" in text
 
 
 def test_business_binding_blocks_unresolved_binding():
     error = validate_business_binding_state(
         {
-            "unresolved_bindings": [
-                {
-                    "type": "metric",
-                    "raw_text": "品牌心智指数",
-                    "reason": "metric_not_bound",
-                }
-            ]
+            "business_binding": {
+                "unresolved": [
+                    {
+                        "type": "metric",
+                        "raw_text": "品牌心智指数",
+                        "reason": "metric_not_bound",
+                    }
+                ]
+            }
         }
     )
 
@@ -106,10 +142,12 @@ def test_business_binding_blocks_unresolved_binding():
 def test_business_binding_passes_when_binding_is_complete():
     error = validate_business_binding_state(
         {
-            "metric_bindings": [{"canonical_metric": "GMV"}],
-            "resolved_filters": [{"canonical_value": "华北"}],
-            "unresolved_bindings": [],
-            "ambiguous_bindings": [],
+            "business_binding": {
+                "metrics": [{"canonical_metric": "GMV"}],
+                "filters": [{"canonical_value": "华北"}],
+                "unresolved": [],
+                "ambiguous": [],
+            }
         }
     )
 
@@ -180,7 +218,7 @@ def test_pre_sql_execution_validation_blocks_sensitive_non_key_join_condition():
 
 def test_pre_sql_execution_validation_flags_invalid_join_relationship_as_repairable():
     state = {
-        "table_infos": [
+        "sql_context": {"tables": [
             {
                 "name": "fact_order",
                 "role": "fact",
@@ -206,7 +244,7 @@ def test_pre_sql_execution_validation_flags_invalid_join_relationship_as_repaira
                     {"name": "category", "role": "dimension"},
                 ],
             },
-        ]
+        ]}
     }
     sql = """
     SELECT dp.category AS category, SUM(fo.order_amount) AS amount
@@ -227,7 +265,7 @@ def test_pre_sql_execution_validation_flags_invalid_join_relationship_as_repaira
 
 def test_repair_invalid_join_relationship_uses_metadata_candidate():
     state = {
-        "table_infos": [
+        "sql_context": {"tables": [
             {
                 "name": "fact_order",
                 "role": "fact",
@@ -244,7 +282,7 @@ def test_repair_invalid_join_relationship_uses_metadata_candidate():
                     {"name": "region_name", "role": "dimension"},
                 ],
             },
-        ]
+        ]}
     }
     sql = """
     SELECT SUM(f.order_amount) AS GMV
@@ -262,7 +300,7 @@ def test_repair_invalid_join_relationship_uses_metadata_candidate():
 
 def test_pre_sql_execution_validation_allows_valid_join_relationship():
     state = {
-        "table_infos": [
+        "sql_context": {"tables": [
             {
                 "name": "fact_order",
                 "role": "fact",
@@ -273,7 +311,7 @@ def test_pre_sql_execution_validation_allows_valid_join_relationship():
                 "role": "dim",
                 "columns": [{"name": "region_id", "role": "primary_key"}],
             },
-        ]
+        ]}
     }
     sql = """
     SELECT dr.region_name AS region_name, SUM(fo.order_amount) AS amount
@@ -307,7 +345,12 @@ def test_pre_sql_execution_validation_allows_semantically_validated_literal():
     sql = "SELECT SUM(order_amount) AS GMV FROM fact_order WHERE region_name = '华北'"
 
     error = validate_sql_before_execution(
-        {"query": "华北 GMV", "validated_enum_values": ["华北"]},
+        {
+            "query": "华北 GMV",
+            "business_binding": {
+                "filters": [{"allowed_sql_literals": ["华北"]}],
+            },
+        },
         sql,
     )
 

@@ -9,6 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from app.agent.context import DataAgentContext
 from app.agent.llm import generate_sql_llm
 from app.agent.llm_usage import ainvoke_llm_with_usage
+from app.agent.memory import format_conversation_messages, format_sql_memory_examples
 from app.agent.state import DataAgentState
 from app.conf.app_config import app_config
 from app.core.log import logger
@@ -30,22 +31,20 @@ async def generate_sql(state: DataAgentState, runtime: Runtime[DataAgentContext]
     writer({"type": "progress", "step": step, "status": "running"})
 
     try:
-        table_infos = state["table_infos"]
-        metric_infos = state["metric_infos"]
-        business_binding = state.get("business_binding") or {
-            "metrics": state.get("metric_bindings") or [],
-            "filters": state.get("resolved_filters") or [],
-            "groups": state.get("groupby_bindings") or [],
-            "time": state.get("time_binding"),
-            "unresolved": state.get("unresolved_bindings") or [],
-            "ambiguous": state.get("ambiguous_bindings") or [],
-        }
-        validated_enum_values = state.get("validated_enum_values") or []
-        date_info = state["date_info"]
-        db_info = state["db_info"]
+        sql_context = state["sql_context"]
+        table_infos = sql_context.get("tables") or []
+        metric_infos = sql_context.get("metrics") or []
+        business_binding = state.get("business_binding") or {}
+        date_info = sql_context.get("date") or {}
+        db_info = sql_context.get("db") or {}
         query = state["query"]
-        conversation_history = state.get("conversation_history") or "无"
-        sql_memory_context = state.get("sql_memory_context") or "无"
+        conversation_history = (
+            format_conversation_messages(state.get("conversation_messages") or [])
+            or "无"
+        )
+        sql_memory_context = (
+            format_sql_memory_examples(state.get("sql_memory_examples") or []) or "无"
+        )
 
         parser = PydanticOutputParser(pydantic_object=GeneratedSqlResponse)
         prompt = PromptTemplate(
@@ -77,7 +76,9 @@ async def generate_sql(state: DataAgentState, runtime: Runtime[DataAgentContext]
                 "business_bindings": yaml.dump(
                     {
                         "business_binding": business_binding,
-                        "validated_enum_values": validated_enum_values,
+                        "validated_enum_values": _validated_enum_values(
+                            business_binding
+                        ),
                     },
                     allow_unicode=True,
                     sort_keys=False,
@@ -100,7 +101,7 @@ async def generate_sql(state: DataAgentState, runtime: Runtime[DataAgentContext]
             _write_answer_delta(writer, "\n\n" + explanation)
         logger.info(f"生成的SQL：{sql}")
         writer({"type": "progress", "step": step, "status": "success"})
-        return {"sql": sql, "sql_explanation": explanation}
+        return {"sql": sql, "trace": {"sql_explanation": explanation}}
 
     except Exception as e:
         logger.error(f"{step} failed: {e}")
@@ -112,3 +113,11 @@ def _write_answer_delta(writer, text: str) -> None:
     content = str(text or "")
     for index in range(0, len(content), 12):
         writer({"type": "answer_delta", "delta": content[index : index + 12]})
+
+
+def _validated_enum_values(business_binding: dict) -> list[str]:
+    return [
+        str(literal)
+        for item in business_binding.get("filters") or []
+        for literal in item.get("allowed_sql_literals", [])
+    ]

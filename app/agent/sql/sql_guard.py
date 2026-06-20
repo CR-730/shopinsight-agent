@@ -201,7 +201,7 @@ def _preferred_table_refs(alias_to_table: dict[str, str]) -> dict[str, str]:
 
 def _column_catalog(state: dict[str, Any]) -> dict[str, dict[str, str]]:
     catalog: dict[str, dict[str, str]] = {}
-    for table in state.get("table_infos") or []:
+    for table in (state.get("sql_context") or {}).get("tables") or []:
         table_name = _field_value(table, "name")
         if not table_name:
             continue
@@ -218,7 +218,7 @@ def _column_catalog(state: dict[str, Any]) -> dict[str, dict[str, str]]:
                 table_role=table_role,
             )
 
-    for column in state.get("retrieved_column_infos") or []:
+    for column in (state.get("retrieval_context") or {}).get("columns") or []:
         table_name = _field_value(column, "table_id")
         column_name = _field_value(column, "name")
         if not table_name or not column_name:
@@ -362,13 +362,13 @@ def _unknown_literal_value(
 ) -> str | None:
     known_literals = {
         str(getattr(value_info, "value", ""))
-        for value_info in state.get("retrieved_value_infos") or []
+        for value_info in (state.get("retrieval_context") or {}).get("values") or []
         if getattr(value_info, "value", None)
     }
-    known_literals.update(str(value) for value in state.get("validated_enum_values") or [])
+    business_binding = state.get("business_binding") or {}
     known_literals.update(
         str(literal)
-        for resolved_filter in state.get("resolved_filters") or []
+        for resolved_filter in business_binding.get("filters") or []
         for literal in resolved_filter.get("allowed_sql_literals", [])
     )
     for literal_expression in expression.find_all(exp.Literal):

@@ -327,20 +327,24 @@ def test_business_binding_node_passes_sliding_history_to_candidate_extractor(mon
         business_binding(
             {
                 "query": "可以",
-                "conversation_history": (
-                    "user: 按会员等级看订单和销售额\n"
-                    "assistant: “订单”指标暂未配置，但“销售额”已成功绑定，"
-                    "您可以先查看按会员等级的销售额数据。"
-                ),
-                "metric_infos": [
+                "conversation_messages": [
+                    {"role": "user", "content": "按会员等级看订单和销售额"},
                     {
-                        "name": "GMV",
-                        "description": "Gross Merchandise Value",
-                        "alias": ["销售额"],
-                        "relevant_columns": ["fact_order.order_amount"],
-                    }
+                        "role": "assistant",
+                        "content": "“订单”指标暂未配置，但“销售额”已成功绑定，您可以先查看按会员等级的销售额数据。",
+                    },
                 ],
-                "table_infos": _customer_table(),
+                "sql_context": {
+                    "metrics": [
+                        {
+                            "name": "GMV",
+                            "description": "Gross Merchandise Value",
+                            "alias": ["销售额"],
+                            "relevant_columns": ["fact_order.order_amount"],
+                        }
+                    ],
+                    "tables": _customer_table(),
+                },
             },
             Runtime(),
         )
@@ -644,32 +648,44 @@ def test_business_binding_node_uses_candidates_and_metadata(monkeypatch):
         business_binding(
             {
                 "query": "北方区域销售额",
-                "metric_infos": [
-                    {
-                        "name": "GMV",
-                        "description": "Gross Merchandise Value",
-                        "alias": ["销售额"],
-                        "relevant_columns": ["fact_order.order_amount"],
-                    }
-                ],
-                "retrieved_value_infos": [
-                    ValueInfo(
-                        id="dim_region.region_name.华北",
-                        value="华北",
-                        column_id="dim_region.region_name",
-                    )
-                ],
+                "sql_context": {
+                    "metrics": [
+                        {
+                            "name": "GMV",
+                            "description": "Gross Merchandise Value",
+                            "alias": ["销售额"],
+                            "relevant_columns": ["fact_order.order_amount"],
+                        }
+                    ],
+                    "tables": [],
+                },
+                "retrieval_context": {
+                    "values": [
+                        ValueInfo(
+                            id="dim_region.region_name.华北",
+                            value="华北",
+                            column_id="dim_region.region_name",
+                        )
+                    ]
+                },
             },
             Runtime(),
         )
     )
 
-    assert result["metric_bindings"][0]["canonical_metric"] == "GMV"
-    assert result["resolved_filters"][0]["canonical_value"] == "华北"
-    assert result["unresolved_bindings"] == []
+    assert result["business_binding"]["metrics"][0]["canonical_metric"] == "GMV"
+    assert result["business_binding"]["filters"][0]["canonical_value"] == "华北"
+    assert result["business_binding"]["unresolved"] == []
+    assert "metric_bindings" not in result
+    assert "resolved_filters" not in result
+    assert "groupby_bindings" not in result
+    assert "time_binding" not in result
+    assert "validated_enum_values" not in result
+    assert "unresolved_bindings" not in result
+    assert "ambiguous_bindings" not in result
 
 
-def test_business_binding_node_blocks_llm_stop_signal():
+def test_business_binding_node_blocks_llm_stop_signal(monkeypatch):
     class MetaRepository:
         async def list_value_aliases(self):
             return []
@@ -682,23 +698,31 @@ def test_business_binding_node_blocks_llm_stop_signal():
             "cost_tracker": object(),
         }
 
+    async def fake_extract_binding_candidates(query, runtime, **kwargs):
+        return BindingCandidates(
+            user_response=(
+                "你是在问今天的天气情况，但我只能处理电商经营数据查询，"
+                "无法提供天气信息。find_error"
+            )
+        )
+
+    monkeypatch.setattr(
+        business_binding_module,
+        "extract_binding_candidates",
+        fake_extract_binding_candidates,
+    )
+
     result = asyncio.run(
         business_binding(
-            {
-                "query": "今天天气怎么样",
-                "binding_candidates": BindingCandidates(
-                    user_response=(
-                        "你是在问今天的天气情况，但我只能处理电商经营数据查询，"
-                        "无法提供天气信息。find_error"
-                    )
-                ).model_dump(),
-            },
+            {"query": "今天天气怎么样"},
             Runtime(),
         )
     )
 
-    assert result["blocked_by"] == "business_binding"
-    assert result["user_facing_message"] == (
+    failure = result["failure"]
+    assert failure["stage"] == "business_binding"
+    assert failure["disposition"] == "blocked"
+    assert failure["user_message"] == (
         "你是在问今天的天气情况，但我只能处理电商经营数据查询，无法提供天气信息。"
     )
 
@@ -707,10 +731,12 @@ def test_filter_metric_prunes_by_bound_metric_without_llm():
     from app.agent.context_compaction import filter_metric_context
 
     result = filter_metric_context(
-        {
-            "query": "销售额最高的商品",
-            "metric_bindings": [{"canonical_metric": "GMV"}],
-            "metric_infos": [
+            {
+                "query": "销售额最高的商品",
+                "business_binding": {
+                    "metrics": [{"canonical_metric": "GMV"}],
+                },
+                "sql_context": {"metrics": [
                 {
                     "name": "GMV",
                     "description": "Gross Merchandise Value",
@@ -723,7 +749,7 @@ def test_filter_metric_prunes_by_bound_metric_without_llm():
                     "alias": ["客单价"],
                     "relevant_columns": ["fact_order.order_amount"],
                 },
-            ],
+            ]},
         }
     )
 

@@ -1,7 +1,7 @@
 ﻿"""Agent graph for the e-commerce NL2SQL flow.
 
 The visible graph is intentionally compact:
-input guard -> context builder -> business binding -> context compaction
+intent recognition -> context builder -> business binding -> context compaction
 -> SQL generation -> SQL executor.
 
 Detailed retrieval, context pruning, SQL validation, correction, and execution
@@ -20,7 +20,7 @@ from app.agent.nodes.business_binding import business_binding
 from app.agent.nodes.context_builder import context_builder
 from app.agent.nodes.context_compaction import context_compaction
 from app.agent.nodes.generate_sql import generate_sql
-from app.agent.nodes.pre_rag_guard import pre_rag_guard
+from app.agent.nodes.intent_recognition import intent_recognition
 from app.agent.nodes.sql_executor import sql_executor
 from app.agent.sql_loop import (
     route_after_safety_guard,
@@ -44,7 +44,9 @@ from app.repositories.qdrant.value_qdrant_repository import ValueQdrantRepositor
 graph_builder = StateGraph(state_schema=DataAgentState, context_schema=DataAgentContext)
 
 # 注册节点：每个节点负责问数链路中的一个清晰步骤
-graph_builder.add_node("pre_rag_guard", traced_node("pre_rag_guard", pre_rag_guard))
+graph_builder.add_node(
+    "intent_recognition", traced_node("intent_recognition", intent_recognition)
+)
 graph_builder.add_node("context_builder", traced_node("context_builder", context_builder))
 graph_builder.add_node("business_binding", traced_node("business_binding", business_binding))
 graph_builder.add_node(
@@ -53,10 +55,10 @@ graph_builder.add_node(
 graph_builder.add_node("generate_sql", traced_node("generate_sql", generate_sql))
 graph_builder.add_node("sql_executor", traced_node("sql_executor", sql_executor))
 
-# Start with the input guard, then build retrieval context before binding.
-graph_builder.add_edge(START, "pre_rag_guard")
+# Start with intent recognition, then build retrieval context before binding.
+graph_builder.add_edge(START, "intent_recognition")
 graph_builder.add_conditional_edges(
-    source="pre_rag_guard",
+    source="intent_recognition",
     path=route_after_safety_guard,
     path_map={
         "continue": "context_builder",

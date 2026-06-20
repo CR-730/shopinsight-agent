@@ -217,20 +217,17 @@ async def _resolve_single_filter(
 
 
 def validate_business_binding_state(state: dict[str, Any]) -> str | None:
-    unresolved = state.get("unresolved_bindings") or []
+    binding = state.get("business_binding") or {}
+    unresolved = binding.get("unresolved") or []
     if unresolved:
         issue = unresolved[0]
         return _binding_issue_message(issue, "unresolved")
 
-    ambiguous = state.get("ambiguous_bindings") or []
+    ambiguous = binding.get("ambiguous") or []
     if ambiguous:
         issue = ambiguous[0]
         return _binding_issue_message(issue, "ambiguous")
     return None
-
-
-def validated_enum_values(filters: list[ResolvedFilterState]) -> list[str]:
-    return [literal for item in filters for literal in item["allowed_sql_literals"]]
 
 
 def _intent_completeness_issues(

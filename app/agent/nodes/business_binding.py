@@ -8,15 +8,14 @@ from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import PromptTemplate
 
 from app.agent.business_binding.candidates import (
-    BindingCandidates,
     extract_binding_candidates,
 )
 from app.agent.business_binding.validator import (
     BindingValidationContext,
     validate_binding_candidates,
     validate_business_binding_state,
-    validated_enum_values,
 )
+from app.agent.failure import build_failure
 from app.agent.llm import llm
 from app.agent.llm_usage import ainvoke_llm_with_usage
 from app.agent.memory import sliding_conversation_history
@@ -46,27 +45,23 @@ async def business_binding(
         await runtime.context["meta_mysql_repository"].list_value_aliases()
     )
 
-    # QueryService 可能已经提前抽取过候选，用于前端流式展示“理解问题”。
-    # 这里复用候选以避免重复 LLM 调用，但下面的绑定结果只信元数据、
-    # RAG 召回和 DW 校验，不直接信候选里的自然语言判断。
-    if state.get("binding_candidates"):
-        candidates = BindingCandidates.model_validate(state["binding_candidates"])
-    else:
-        candidates = await extract_binding_candidates(
-            query,
-            runtime,
-            conversation_history=sliding_conversation_history(
-                state.get("conversation_history") or ""
-            ),
-            metric_infos=state.get("metric_infos") or [],
-            retrieved_value_infos=state.get("retrieved_value_infos") or [],
-            enum_aliases=enum_aliases,
-            table_infos=state.get("table_infos"),
-        )
+    sql_context = state.get("sql_context") or {}
+    retrieval_context = state.get("retrieval_context") or {}
+    candidates = await extract_binding_candidates(
+        query,
+        runtime,
+        conversation_history=sliding_conversation_history(
+            state.get("conversation_messages") or []
+        ),
+        metric_infos=sql_context.get("metrics") or [],
+        retrieved_value_infos=retrieval_context.get("values") or [],
+        enum_aliases=enum_aliases,
+        table_infos=sql_context.get("tables") or [],
+    )
     user_response, should_stop = split_stop_signal(candidates.user_response)
-    if user_response and not state.get("binding_candidates"):
-        _write_answer_delta(writer, user_response)
     if should_stop:
+        if user_response:
+            _write_answer_delta(writer, "\n\n" + user_response)
         writer(
             {
                 "type": "progress",
@@ -84,37 +79,28 @@ async def business_binding(
                 "unresolved": [],
                 "ambiguous": [],
             },
-            "metric_bindings": [],
-            "resolved_filters": [],
-            "groupby_bindings": [],
-            "time_binding": None,
-            "validated_enum_values": [],
-            "unresolved_bindings": [],
-            "ambiguous_bindings": [],
-            "safety_error": candidates.user_response,
-            "blocked_by": "business_binding",
-            "user_facing_message": user_response,
+            "failure": build_failure(
+                category="business_binding",
+                stage="business_binding",
+                code="candidate_extraction_blocked",
+                message=candidates.user_response,
+                disposition="blocked",
+                user_message=user_response,
+            ),
         }
     binding = await validate_binding_candidates(
         candidates,
         BindingValidationContext(
-            metric_infos=state.get("metric_infos") or [],
-            table_infos=state.get("table_infos") or [],
-            retrieved_value_infos=state.get("retrieved_value_infos") or [],
+            metric_infos=sql_context.get("metrics") or [],
+            table_infos=sql_context.get("tables") or [],
+            retrieved_value_infos=retrieval_context.get("values") or [],
             enum_aliases=enum_aliases,
             dw_mysql_repository=runtime.context["dw_mysql_repository"],
         ),
     )
     update = {
         "business_binding": binding,
-        "metric_bindings": binding["metrics"],
-        "resolved_filters": binding["filters"],
-        "groupby_bindings": binding.get("groups") or [],
-        "time_binding": binding["time"],
-        "validated_enum_values": validated_enum_values(binding["filters"]),
-        "unresolved_bindings": binding["unresolved"],
-        "ambiguous_bindings": binding["ambiguous"],
-        "safety_error": None,
+        "failure": None,
     }
 
     logger.info(f"业务绑定结果：{binding}")
@@ -134,11 +120,15 @@ async def business_binding(
         )
         blocked_update = {
             **update,
-            "safety_error": rule_error,
-            "blocked_by": "business_binding",
+            "failure": build_failure(
+                category="business_binding",
+                stage="business_binding",
+                code=_binding_failure_code(binding),
+                message=rule_error,
+                disposition="blocked",
+                user_message=user_facing_message,
+            ),
         }
-        if user_facing_message:
-            blocked_update["user_facing_message"] = user_facing_message
         return blocked_update
     writer({"type": "progress", "step": step, "status": "success"})
     return update
@@ -161,6 +151,13 @@ def _write_answer_delta(writer, text: str) -> None:
         return
     for index in range(0, len(content), 12):
         writer({"type": "answer_delta", "delta": content[index : index + 12]})
+
+
+def _binding_failure_code(binding: dict[str, Any]) -> str:
+    issues = [*(binding.get("unresolved") or []), *(binding.get("ambiguous") or [])]
+    if not issues:
+        return "binding_invalid"
+    return str(issues[0].get("reason") or issues[0].get("type") or "binding_invalid")
 
 
 async def _blocked_binding_response(

@@ -1,16 +1,17 @@
 from app.agent.graph import graph
 
 
-def test_sql_memory_recall_runs_only_after_pre_rag_guard_continue():
+def test_sql_memory_recall_runs_only_after_intent_recognition_continue():
     edges = {
         (edge.source, edge.target, edge.data, edge.conditional)
         for edge in graph.get_graph().edges
     }
 
-    assert ("pre_rag_guard", "context_builder", "continue", True) in edges
-    assert ("pre_rag_guard", "__end__", "blocked", True) in edges
+    assert ("intent_recognition", "context_builder", "continue", True) in edges
+    assert ("intent_recognition", "__end__", "blocked", True) in edges
 
-    assert ("pre_rag_guard", "extract_keywords", "continue", True) not in edges
+    assert ("intent_recognition", "extract_keywords", "continue", True) not in edges
+    assert not any(edge[0] == "pre_rag_guard" for edge in edges)
     assert not any(edge[0] == "recall_sql_memory" for edge in edges)
     assert not any(edge[0] == "extract_keywords" for edge in edges)
     assert not any(edge[0] == "merge_retrieved_info" for edge in edges)

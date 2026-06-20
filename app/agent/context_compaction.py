@@ -25,7 +25,8 @@ async def filter_table_context(
     state: DataAgentState, context: dict[str, Any]
 ) -> dict[str, list[TableInfoState]]:
     query = state["query"]
-    table_infos: list[TableInfoState] = state["table_infos"]
+    sql_context = state.get("sql_context") or {}
+    table_infos: list[TableInfoState] = sql_context.get("tables") or []
     if _ablation_options(context).get("disable_context_compaction"):
         prompt_table_infos = table_infos
     else:
@@ -76,9 +77,13 @@ async def filter_table_context(
 
 
 def filter_metric_context(state: DataAgentState) -> dict[str, list[MetricInfoState]]:
-    metric_infos: list[MetricInfoState] = state["metric_infos"]
+    sql_context = state.get("sql_context") or {}
+    metric_infos: list[MetricInfoState] = sql_context.get("metrics") or []
+    business_binding = state.get("business_binding") or {}
     bound_metric_names = {
-        binding["canonical_metric"] for binding in state.get("metric_bindings") or []
+        binding["canonical_metric"]
+        for binding in business_binding.get("metrics") or []
+        if binding.get("canonical_metric")
     }
 
     if bound_metric_names:

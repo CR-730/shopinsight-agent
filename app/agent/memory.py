@@ -111,18 +111,19 @@ def build_sql_tool_memory(question: str, state: dict[str, Any]) -> ToolMemory | 
     # 原始对话文本和半成品绑定不写入可复用记忆，避免后续 SQL 生成
     # 继承失败轮次或歧义轮次的上下文。
     sql = str(state.get("sql") or "").strip()
-    final_answer = state.get("final_answer") or []
+    output = state.get("output") or {}
+    rows = output.get("rows") or []
     business_binding = _trusted_business_binding(state)
+    binding_has_issue = bool(
+        (state.get("business_binding") or {}).get("unresolved")
+        or (state.get("business_binding") or {}).get("ambiguous")
+    )
     if (
         not sql
-        or not final_answer
+        or not rows
         or not business_binding
-        or state.get("error")
-        or state.get("blocked_by")
-        or state.get("safety_error")
-        or state.get("exception_stage")
-        or state.get("unresolved_bindings")
-        or state.get("ambiguous_bindings")
+        or state.get("failure")
+        or binding_has_issue
     ):
         return None
     return ToolMemory(
@@ -137,19 +138,36 @@ def build_sql_tool_memory(question: str, state: dict[str, Any]) -> ToolMemory | 
 
 
 def format_conversation_history(messages: list[Message], limit: int = 8) -> str:
+    return format_conversation_messages(messages_to_state(messages), limit=limit)
+
+
+def messages_to_state(messages: list[Message]) -> list[dict[str, str]]:
+    return [{"role": message.role, "content": message.content} for message in messages]
+
+
+def format_conversation_messages(
+    messages: list[dict[str, Any]] | str | None, limit: int = 8
+) -> str:
+    if isinstance(messages, str):
+        return messages
+    if not messages:
+        return ""
     return "\n".join(
-        f"{message.role}: {message.content}" for message in messages[-limit:]
+        f"{message.get('role')}: {message.get('content')}"
+        for message in messages[-limit:]
+        if message.get("role") and message.get("content")
     )
 
 
 def sliding_conversation_history(
-    conversation_history: str,
+    conversation_history: str | list[dict[str, Any]],
     *,
     token_budget: int = CONVERSATION_HISTORY_TOKEN_BUDGET,
 ) -> str:
     """Keep full history until it exceeds budget, then drop oldest lines."""
 
-    lines = [line for line in conversation_history.splitlines() if line.strip()]
+    text = format_conversation_messages(conversation_history)
+    lines = [line for line in text.splitlines() if line.strip()]
     if estimate_tokens("\n".join(lines)) <= token_budget:
         return "\n".join(lines)
 
@@ -175,23 +193,43 @@ def _trim_to_token_budget(text: str, token_budget: int) -> str:
 
 
 def format_tool_memory_results(results: list[ToolMemorySearchResult]) -> str:
-    if not results:
+    return format_sql_memory_examples(tool_memory_results_to_examples(results))
+
+
+def tool_memory_results_to_examples(
+    results: list[ToolMemorySearchResult],
+) -> list[dict[str, Any]]:
+    return [
+        {
+            "rank": result.rank,
+            "question": result.memory.question,
+            "sql": str(result.memory.args.get("sql") or ""),
+            "similarity": round(float(result.similarity_score), 4),
+        }
+        for result in results
+    ]
+
+
+def format_sql_memory_examples(examples: list[dict[str, Any]] | str | None) -> str:
+    if isinstance(examples, str):
+        return examples
+    if not examples:
         return ""
     lines: list[str] = []
-    for result in results:
-        sql = str(result.memory.args.get("sql") or "")
+    for item in examples:
         lines.append(
-            f"{result.rank}. question: {result.memory.question}\n"
-            f"   sql: {sql}\n"
-            f"   similarity: {result.similarity_score:.2f}"
+            f"{item.get('rank')}. question: {item.get('question')}\n"
+            f"   sql: {item.get('sql')}\n"
+            f"   similarity: {float(item.get('similarity') or 0):.2f}"
         )
     return "\n".join(lines)
 
 
-def build_retrieval_query(query: str, conversation_history: str) -> str:
-    user_history = [
-        line for line in conversation_history.splitlines() if line.startswith("user:")
-    ]
+def build_retrieval_query(
+    query: str, conversation_messages: str | list[dict[str, Any]] | None
+) -> str:
+    history = format_conversation_messages(conversation_messages)
+    user_history = [line for line in history.splitlines() if line.startswith("user:")]
     context = "\n".join(user_history[-2:])
     return f"{context}\nuser: {query}" if context else query
 
@@ -200,14 +238,6 @@ def _trusted_business_binding(state: dict[str, Any]) -> dict[str, Any]:
     """只返回已经过校验、可以安全写入 SQL 记忆的绑定槽位。"""
 
     binding = dict(state.get("business_binding") or {})
-    if state.get("metric_bindings"):
-        binding.setdefault("metrics", state["metric_bindings"])
-    if state.get("resolved_filters"):
-        binding.setdefault("filters", state["resolved_filters"])
-    if state.get("time_binding"):
-        binding.setdefault("time", state["time_binding"])
-    if state.get("groupby_bindings"):
-        binding.setdefault("groups", state["groupby_bindings"])
     return {
         key: value
         for key, value in binding.items()
