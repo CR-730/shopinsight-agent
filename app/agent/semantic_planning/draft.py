@@ -32,7 +32,6 @@ class EnumPredicateMention(_StrictDraftModel):
     kind: Literal["enum"] = "enum"
     raw_text: str
     value_candidate_ids: list[str] = Field(default_factory=list)
-    column_candidate_ids: list[str] = Field(default_factory=list)
     operator_intent: Literal["eq", "neq", "in", "not_in"] = "eq"
 
 

@@ -83,7 +83,6 @@ def test_predicates_are_discriminated_by_kind():
                     "kind": "enum",
                     "raw_text": "华北",
                     "value_candidate_ids": ["value:north"],
-                    "column_candidate_ids": ["column:region"],
                     "operator_intent": "eq",
                 },
                 {
@@ -136,7 +135,6 @@ def test_enum_draft_rejects_canonical_value_and_free_column_name():
                 "kind": "enum",
                 "raw_text": "华北",
                 "value_candidate_ids": ["value:north"],
-                "column_candidate_ids": ["column:region"],
                 "operator_intent": "eq",
                 "canonical_value": "华北地区",
             }
@@ -148,6 +146,19 @@ def test_enum_draft_rejects_canonical_value_and_free_column_name():
                 "kind": "enum",
                 "raw_text": "华北",
                 "column_name": "region_name",
+                "operator_intent": "eq",
+            }
+        )
+
+
+def test_enum_draft_rejects_redundant_column_candidate_ids():
+    with pytest.raises(ValidationError):
+        EnumPredicateMention.model_validate(
+            {
+                "kind": "enum",
+                "raw_text": "华北",
+                "value_candidate_ids": ["value:north"],
+                "column_candidate_ids": ["column:region"],
                 "operator_intent": "eq",
             }
         )

@@ -1,5 +1,7 @@
 # ShopInsight 语义规划层重构设计
 
+> **当前实现差异（2026-07-20）：** 枚举筛选已收紧为严格值候选绑定。`EnumPredicateMention` 不再包含字段候选 ID；字段由 `ValueCandidate.column_id` 唯一推导。缺少值候选时返回 `value_not_bound` 并阻断，不再执行 DW MySQL 发现式兜底。DW 精确查询仅用于验证 Meta 别名候选的规范值。
+
 ## 1. 背景与结论
 
 当前主链为：
@@ -455,7 +457,7 @@ PlanningIssue
 - 包含唯一候选、歧义和 DW 精确兜底三个短例子；
 - 不请求展示隐藏思维，只输出结构化结果；
 - 自检项具体可观察；
-- Prompt 解析失败进入受控降级，不使用自由文本结果继续执行。
+- Prompt 调用或解析失败时只保留可诊断的显式证据，并产生 `semantic_interpretation_failed` 阻断项；不得用不完整语义继续执行。
 
 ## 16. 分层验收标准
 

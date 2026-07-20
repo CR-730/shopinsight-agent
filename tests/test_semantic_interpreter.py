@@ -188,6 +188,8 @@ def test_prompt_contains_controlled_ids_but_no_backend_owned_output_fields(
     assert f'"candidate_id": "{RELATIONSHIP_ID}"' in prompt_text
     assert '"left_column_id": "dim_region.region_id"' in prompt_text
     assert '"right_column_id": "fact_order.region_id"' in prompt_text
+    assert "没有对应取值候选" in prompt_text
+    assert '"value_candidate_ids":[]' in prompt_text
     for forbidden in (
         "canonical_value",
         "start_date",
@@ -221,6 +223,13 @@ def test_fallback_keeps_exact_ids_but_does_not_infer_roles_operators_or_time(
     assert result.limit_mentions == []
     assert result.join_mentions == []
     assert result.ambiguity_reports[0].candidate_ids == ["dim_region.region_name"]
+    failure_report = next(
+        report
+        for report in result.ambiguity_reports
+        if report.reason == "semantic_interpretation_failed"
+    )
+    assert failure_report.raw_text == result.source_query
+    assert failure_report.candidate_ids == []
 
 
 def test_fallback_never_selects_first_value_when_exact_term_has_multiple_ids(
@@ -278,6 +287,67 @@ def test_interpreter_ignores_backend_owned_temporal_target_ids(monkeypatch):
 
     assert result.predicate_mentions[0].kind == "temporal"
     assert not hasattr(result.predicate_mentions[0], "target_candidate_ids")
+
+
+def test_interpreter_ignores_redundant_enum_column_candidate_ids(monkeypatch):
+    async def fake_invoke(*args, **kwargs):
+        return {
+            "source_query": "统计华北销售额",
+            "predicate_mentions": [
+                {
+                    "kind": "enum",
+                    "raw_text": "华北",
+                    "value_candidate_ids": ["value:region:north"],
+                    "column_candidate_ids": ["dim_region.region_name"],
+                    "operator_intent": "eq",
+                }
+            ],
+        }
+
+    monkeypatch.setattr(interpreter, "ainvoke_llm_with_usage", fake_invoke)
+
+    result = asyncio.run(
+        interpreter.interpret_semantics(
+            "统计华北销售额",
+            _runtime(),
+            conversation_history="",
+            catalog=_catalog(),
+        )
+    )
+
+    mention = result.predicate_mentions[0]
+    assert mention.value_candidate_ids == ["value:region:north"]
+    assert not hasattr(mention, "column_candidate_ids")
+
+
+def test_interpreter_preserves_enum_mention_without_value_candidates(monkeypatch):
+    async def fake_invoke(*args, **kwargs):
+        return {
+            "source_query": "统计火星区域销售额",
+            "predicate_mentions": [
+                {
+                    "kind": "enum",
+                    "raw_text": "火星区域",
+                    "value_candidate_ids": [],
+                    "operator_intent": "eq",
+                }
+            ],
+        }
+
+    monkeypatch.setattr(interpreter, "ainvoke_llm_with_usage", fake_invoke)
+
+    result = asyncio.run(
+        interpreter.interpret_semantics(
+            "统计火星区域销售额",
+            _runtime(),
+            conversation_history="",
+            catalog=_catalog(),
+        )
+    )
+
+    mention = result.predicate_mentions[0]
+    assert mention.raw_text == "火星区域"
+    assert mention.value_candidate_ids == []
 
 
 def test_temporal_filter_is_not_duplicated_as_group_dimension(monkeypatch):

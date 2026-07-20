@@ -89,20 +89,21 @@ def _context(repository=None):
     )
 
 
-def test_value_candidate_resolves_to_its_owned_column():
+def test_value_candidate_resolves_to_its_owned_column_without_dw_query():
+    repository = FakeDWRepository()
     mention = EnumPredicateMention(
         raw_text="华北",
         value_candidate_ids=["v-north"],
-        column_candidate_ids=["dim_region.region_name"],
         operator_intent="eq",
     )
 
-    result = asyncio.run(resolve_enum_predicate(mention, _context()))
+    result = asyncio.run(resolve_enum_predicate(mention, _context(repository)))
 
     assert result.status == "resolved"
     assert result.plan.column_id == "dim_region.region_name"
     assert result.plan.canonical_values == ["华北地区"]
     assert result.plan.allowed_sql_literals == ["华北地区"]
+    assert repository.calls == []
 
 
 def test_values_from_different_columns_are_ambiguous_without_dw_query():
@@ -110,7 +111,6 @@ def test_values_from_different_columns_are_ambiguous_without_dw_query():
     mention = EnumPredicateMention(
         raw_text="华南",
         value_candidate_ids=["v-south-region", "v-south-area"],
-        column_candidate_ids=[],
         operator_intent="eq",
     )
 
@@ -121,67 +121,26 @@ def test_values_from_different_columns_are_ambiguous_without_dw_query():
     assert repository.calls == []
 
 
-def test_exact_dw_fallback_is_scoped_to_one_column():
-    repository = FakeDWRepository(
-        existing={("dim_region", "region_name", "华北")}
-    )
+def test_missing_value_candidate_blocks_without_dw_query():
+    repository = FakeDWRepository()
     mention = EnumPredicateMention(
         raw_text="华北",
         value_candidate_ids=[],
-        column_candidate_ids=["dim_region.region_name"],
-        operator_intent="eq",
-    )
-
-    result = asyncio.run(resolve_enum_predicate(mention, _context(repository)))
-
-    assert repository.calls == [("dim_region", "region_name", "华北")]
-    assert result.status == "resolved"
-    assert result.plan.canonical_values == ["华北"]
-
-
-def test_exact_dw_fallback_does_not_fuzzy_match_longer_database_value():
-    repository = FakeDWRepository(
-        existing={("dim_region", "region_name", "华北地区")}
-    )
-    mention = EnumPredicateMention(
-        raw_text="华北",
-        value_candidate_ids=[],
-        column_candidate_ids=["dim_region.region_name"],
         operator_intent="eq",
     )
 
     result = asyncio.run(resolve_enum_predicate(mention, _context(repository)))
 
     assert result.status == "unresolved"
-    assert result.issue.code == "value_not_found"
-    assert repository.calls == [("dim_region", "region_name", "华北")]
-
-
-def test_multiple_column_hints_never_trigger_dw_fallback():
-    repository = FakeDWRepository()
-    mention = EnumPredicateMention(
-        raw_text="华南",
-        value_candidate_ids=[],
-        column_candidate_ids=[
-            "dim_region.region_name",
-            "dim_sales_area.area_name",
-        ],
-        operator_intent="eq",
-    )
-
-    result = asyncio.run(resolve_enum_predicate(mention, _context(repository)))
-
-    assert result.status == "ambiguous"
-    assert result.issue.code == "filter_column_ambiguous"
+    assert result.issue.code == "value_not_bound"
     assert repository.calls == []
 
 
-def test_repository_error_is_failed_not_value_not_found():
+def test_meta_alias_repository_error_is_failed_not_value_not_found():
     repository = FakeDWRepository(error=RuntimeError("mysql unavailable"))
     mention = EnumPredicateMention(
         raw_text="华北",
-        value_candidate_ids=[],
-        column_candidate_ids=["dim_region.region_name"],
+        value_candidate_ids=["v-north-alias"],
         operator_intent="eq",
     )
 
@@ -192,6 +151,21 @@ def test_repository_error_is_failed_not_value_not_found():
     assert result.issue.code == "dw_value_lookup_failed"
 
 
+def test_missing_meta_alias_canonical_value_is_value_not_found():
+    repository = FakeDWRepository()
+    mention = EnumPredicateMention(
+        raw_text="华北",
+        value_candidate_ids=["v-north-alias"],
+        operator_intent="eq",
+    )
+
+    result = asyncio.run(resolve_enum_predicate(mention, _context(repository)))
+
+    assert result.status == "unresolved"
+    assert result.issue.code == "value_not_found"
+    assert repository.calls == [("dim_region", "region_name", "华北地区")]
+
+
 def test_meta_alias_candidate_is_verified_by_exact_canonical_dw_value():
     repository = FakeDWRepository(
         existing={("dim_region", "region_name", "华北地区")}
@@ -199,7 +173,6 @@ def test_meta_alias_candidate_is_verified_by_exact_canonical_dw_value():
     mention = EnumPredicateMention(
         raw_text="华北",
         value_candidate_ids=["v-north-alias"],
-        column_candidate_ids=["dim_region.region_name"],
         operator_intent="eq",
     )
 
@@ -215,7 +188,6 @@ def test_in_operator_accepts_multiple_values_only_within_one_column():
     mention = EnumPredicateMention(
         raw_text="华北和华南",
         value_candidate_ids=["v-north", "v-south-region"],
-        column_candidate_ids=["dim_region.region_name"],
         operator_intent="in",
     )
 

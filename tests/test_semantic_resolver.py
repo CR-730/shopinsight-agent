@@ -106,7 +106,6 @@ def _draft(**changes):
             EnumPredicateMention(
                 raw_text="华北地区",
                 value_candidate_ids=["v-north"],
-                column_candidate_ids=["dim_region.region_name"],
             ),
             TemporalPredicateMention(
                 raw_text="2025年第一季度", relation_intent="during"
@@ -174,6 +173,23 @@ def test_any_issue_blocks_the_entire_untrusted_plan():
     assert result.status == "unresolved"
     assert result.plan is None
     assert result.issues[0].code == "invalid_candidate_id"
+
+
+def test_missing_enum_value_candidate_blocks_the_entire_plan():
+    draft = _draft(
+        predicate_mentions=[
+            EnumPredicateMention(
+                raw_text="华北地区",
+                value_candidate_ids=[],
+            )
+        ]
+    )
+
+    result = asyncio.run(resolve_semantic_draft(draft, _context()))
+
+    assert result.status == "unresolved"
+    assert result.plan is None
+    assert result.issues[0].code == "value_not_bound"
 
 
 def test_llm_ambiguity_report_blocks_without_selecting_first_candidate():

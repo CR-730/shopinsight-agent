@@ -149,7 +149,7 @@ async def resolve_semantic_draft(
                     trusted_sources=context.trusted_sources,
                 ),
             )
-            method = "controlled_value_or_exact_dw"
+            method = "controlled_value_candidate"
         elif isinstance(mention, NumericPredicateMention):
             result = resolve_numeric_predicate(
                 mention,

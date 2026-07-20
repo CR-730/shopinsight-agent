@@ -62,8 +62,20 @@ async def interpret_semantics(
         draft = draft.model_copy(update={"source_query": query})
         return _drop_temporal_filter_dimensions(draft, query)
     except Exception as exc:
-        logger.warning(f"语义理解结构化输出失败，降级为严格显式命中: {exc}")
-        return fallback_semantic_draft(query=query, catalog=catalog)
+        logger.warning(f"语义理解结构化输出失败，保留显式证据并阻断执行: {exc}")
+        fallback = fallback_semantic_draft(query=query, catalog=catalog)
+        return fallback.model_copy(
+            update={
+                "ambiguity_reports": [
+                    *fallback.ambiguity_reports,
+                    AmbiguityReport(
+                        raw_text=query,
+                        candidate_ids=[],
+                        reason="semantic_interpretation_failed",
+                    ),
+                ]
+            }
+        )
 
 
 def fallback_semantic_draft(
@@ -221,7 +233,6 @@ def _sanitize_predicate(item: dict[str, Any]) -> dict[str, Any]:
             "kind",
             "raw_text",
             "value_candidate_ids",
-            "column_candidate_ids",
             "operator_intent",
         },
         "numeric": {

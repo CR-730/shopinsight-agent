@@ -1,4 +1,4 @@
-"""Resolve enum mentions using controlled IDs and exact DW lookups only."""
+"""Resolve enum mentions from controlled value candidates only."""
 
 from __future__ import annotations
 
@@ -12,7 +12,6 @@ from app.agent.semantic_planning.catalog import (
 from app.agent.semantic_planning.draft import EnumPredicateMention
 from app.agent.semantic_planning.issues import PlanningIssue
 from app.agent.semantic_planning.plan import EnumPredicate
-from app.agent.semantic_planning.resolvers.common import select_one_candidate
 
 EnumResolutionStatus = Literal["resolved", "unresolved", "ambiguous", "failed"]
 
@@ -40,25 +39,21 @@ async def resolve_enum_predicate(
             "unresolved",
             "untrusted_source_span",
             mention,
-            mention.value_candidate_ids + mention.column_candidate_ids,
+            mention.value_candidate_ids,
         )
 
     invalid_value_ids = _invalid_ids(
         mention.value_candidate_ids, context.catalog.values
     )
-    invalid_column_ids = _invalid_ids(
-        mention.column_candidate_ids, context.catalog.columns
-    )
-    invalid_ids = invalid_value_ids + invalid_column_ids
-    if invalid_ids:
+    if invalid_value_ids:
         return _blocked(
-            "unresolved", "invalid_candidate_id", mention, invalid_ids
+            "unresolved", "invalid_candidate_id", mention, invalid_value_ids
         )
 
     value_ids = list(dict.fromkeys(mention.value_candidate_ids))
-    if value_ids:
-        return await _resolve_catalog_values(mention, value_ids, context)
-    return await _resolve_exact_dw_value(mention, context)
+    if not value_ids:
+        return _blocked("unresolved", "value_not_bound", mention, [])
+    return await _resolve_catalog_values(mention, value_ids, context)
 
 
 async def _resolve_catalog_values(
@@ -74,21 +69,6 @@ async def _resolve_catalog_values(
         )
     column_id = owning_columns[0]
 
-    selected_columns = list(dict.fromkeys(mention.column_candidate_ids))
-    if len(selected_columns) > 1:
-        return _blocked(
-            "ambiguous",
-            "filter_column_ambiguous",
-            mention,
-            selected_columns,
-        )
-    if selected_columns and selected_columns[0] != column_id:
-        return _blocked(
-            "unresolved",
-            "value_column_mismatch",
-            mention,
-            [*value_ids, *selected_columns],
-        )
     if mention.operator_intent in {"eq", "neq"} and len(value_ids) != 1:
         return _blocked("ambiguous", "value_ambiguous", mention, value_ids)
 
@@ -121,46 +101,6 @@ async def _resolve_catalog_values(
             operator=mention.operator_intent,
             canonical_values=canonical_values,
             allowed_sql_literals=list(canonical_values),
-        ),
-    )
-
-
-async def _resolve_exact_dw_value(
-    mention: EnumPredicateMention,
-    context: EnumResolutionContext,
-) -> EnumPredicateResolution:
-    if mention.operator_intent in {"in", "not_in"}:
-        return _blocked("unresolved", "value_not_bound", mention, [])
-    selection = select_one_candidate(
-        raw_text=mention.raw_text,
-        candidate_ids=mention.column_candidate_ids,
-        catalog=context.catalog.columns,
-        trusted_sources=context.trusted_sources,
-        issue_prefix="filter_column",
-    )
-    if selection.status != "resolved":
-        return EnumPredicateResolution(
-            status=selection.status,
-            issue=selection.issue,
-        )
-    column = selection.candidate
-    assert isinstance(column, ColumnCandidate)
-    verified = await _exact_value_exists(
-        column,
-        mention.raw_text,
-        mention,
-        mention.column_candidate_ids,
-        context,
-    )
-    if isinstance(verified, EnumPredicateResolution):
-        return verified
-    return EnumPredicateResolution(
-        status="resolved",
-        plan=EnumPredicate(
-            column_id=column.candidate_id,
-            operator=mention.operator_intent,
-            canonical_values=[mention.raw_text],
-            allowed_sql_literals=[mention.raw_text],
         ),
     )
 

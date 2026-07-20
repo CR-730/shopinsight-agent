@@ -1,5 +1,7 @@
 # ShopInsight 受控业务绑定与确定性上下文裁剪重构设计
 
+> **历史设计（已废弃）：** 本文记录旧 `business_binding` 方案，不代表当前运行时。当前实现使用 `semantic_planning`，枚举筛选只能选择受控值候选；缺少值候选时直接阻断，不再通过字段候选查询 DW MySQL 完成绑定。
+
 ## 1. 背景
 
 当前链路在 `context_builder` 后依次执行：

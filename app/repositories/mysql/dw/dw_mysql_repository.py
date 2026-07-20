@@ -37,7 +37,7 @@ class DWMySQLRepository:
     async def column_value_exists(
         self, table_name: str, column_name: str, value: str
     ) -> bool:
-        """权威检查枚举值是否存在，避免把 RAG 漏召回误判为不存在。"""
+        """验证元数据别名对应的规范枚举值在真实数仓中存在。"""
 
         cache_key = (table_name, column_name, value)
         if cache_key in self._column_value_exists_cache:
