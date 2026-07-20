@@ -351,7 +351,8 @@ def test_sql_executor_has_internal_loop_limit(monkeypatch):
         )
     )
 
-    assert validations == 3
-    assert corrections == 2
+    assert validations == 2
+    assert corrections == 1
     assert result["failure"]["code"] == "correction_exhausted"
     assert result["failure"]["message"] == "Unknown column"
+    assert result["trace"]["sql_correction_stop_reason"] == "differences_unchanged"

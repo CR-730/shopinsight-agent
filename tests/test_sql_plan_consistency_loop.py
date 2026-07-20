@@ -224,9 +224,70 @@ def test_repeated_plan_mismatch_exhausts_without_execution(monkeypatch):
     result = asyncio.run(node.sql_executor(_state("SELECT 1"), _runtime(repository)))
 
     assert result["failure"]["code"] == "correction_exhausted"
-    assert len(corrections) == 2
+    assert len(corrections) == 1
+    assert result["trace"]["sql_correction_stop_reason"] == "differences_unchanged"
     assert repository.validated_sql == []
     assert repository.ran_sql == []
+
+
+def test_correction_stops_on_a_b_a_cycle(monkeypatch):
+    calls = []
+    repository = RecordingRepository(calls)
+    _install_downstream(monkeypatch, calls)
+    repaired_sql = iter(["SELECT 2", "SELECT 1"])
+    corrections = []
+
+    def consistency(sql, plan):
+        code = "measure_missing" if sql == "SELECT 1" else "order_missing"
+        return _mismatch_result(code)
+
+    async def repair(state, context, validation_error, **kwargs):
+        corrections.append(state["sql"])
+        return {"sql": next(repaired_sql), "attempts": len(corrections)}
+
+    monkeypatch.setattr(node, "validate_sql_plan_consistency", consistency)
+    monkeypatch.setattr(node, "correct_sql_candidate", repair)
+
+    result = asyncio.run(node.sql_executor(_state("SELECT 1"), _runtime(repository)))
+
+    assert result["failure"]["code"] == "correction_exhausted"
+    assert result["trace"]["sql_correction_stop_reason"] == "sql_cycle"
+    assert corrections == ["SELECT 1", "SELECT 2"]
+    assert repository.ran_sql == []
+
+
+def test_sql_fingerprint_preserves_string_literal_case():
+    upper = node._sql_fingerprint("SELECT * FROM dim_product WHERE brand = 'iPhone'")
+    lower = node._sql_fingerprint("SELECT * FROM dim_product WHERE brand = 'iphone'")
+
+    assert upper != lower
+
+
+def test_correction_continues_when_difference_payload_changes(monkeypatch):
+    calls = []
+    repository = RecordingRepository(calls)
+    _install_downstream(monkeypatch, calls)
+    repaired_sql = iter(["SELECT 2", GOOD_SQL])
+    corrections = []
+
+    def consistency(sql, plan):
+        if "BETWEEN" in sql:
+            return _pass_result()
+        code = "measure_missing" if sql == "SELECT 1" else "order_missing"
+        return _mismatch_result(code)
+
+    async def repair(state, context, validation_error, **kwargs):
+        corrections.append(state["sql"])
+        return {"sql": next(repaired_sql), "attempts": len(corrections)}
+
+    monkeypatch.setattr(node, "validate_sql_plan_consistency", consistency)
+    monkeypatch.setattr(node, "correct_sql_candidate", repair)
+
+    result = asyncio.run(node.sql_executor(_state("SELECT 1"), _runtime(repository)))
+
+    assert result["failure"] is None
+    assert corrections == ["SELECT 1", "SELECT 2"]
+    assert repository.ran_sql == [normalize_sql_for_execution(GOOD_SQL)]
 
 
 def test_missing_time_is_repaired_before_explain(monkeypatch):

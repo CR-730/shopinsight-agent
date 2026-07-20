@@ -4,13 +4,17 @@ from __future__ import annotations
 
 from collections import Counter
 from dataclasses import dataclass
-from decimal import Decimal, InvalidOperation
+from decimal import InvalidOperation
 from typing import Any, Sequence
 
 from sqlglot import expressions as exp
 from sqlglot import parse, parse_one
 from sqlglot.errors import ParseError
 
+from app.agent.predicate_normalization import (
+    canonical_number,
+    canonical_set_values,
+)
 from app.agent.semantic_planning.plan import (
     EnumPredicate,
     NumericPredicate,
@@ -213,9 +217,7 @@ def _compare_joins(expression, plan, context, differences):
         for predicate in _flatten_and(condition):
             if not isinstance(predicate, exp.EQ):
                 invalid_endpoints.append(
-                    frozenset(
-                        {f"<invalid-on:{predicate.sql(dialect='mysql')}>"}
-                    )
+                    frozenset({f"<invalid-on:{predicate.sql(dialect='mysql')}>"})
                 )
                 continue
             left = _column_id(predicate.left, context)
@@ -234,9 +236,7 @@ def _compare_joins(expression, plan, context, differences):
                 )
             else:
                 invalid_endpoints.append(
-                    frozenset(
-                        {f"<invalid-on:{predicate.sql(dialect='mysql')}>"}
-                    )
+                    frozenset({f"<invalid-on:{predicate.sql(dialect='mysql')}>"})
                 )
 
     if unsupported_types:
@@ -331,17 +331,23 @@ def _compare_predicates(expression, plan, context, differences):
     for predicate in plan.predicates:
         expected.append(_expected_predicate(predicate, plan))
         kinds.append(predicate.kind)
+    expected_kinds = {
+        (atom[0], atom[1]): kind for atom, kind in zip(expected, kinds, strict=True)
+    }
     actual = []
     for clause in ("where", "having"):
         node = expression.args.get(clause)
         if node is not None:
             actual.extend(
-                _sql_predicate(item, clause, context)
-                for item in _flatten_and(node.this)
+                _sql_predicates(
+                    node.this,
+                    clause,
+                    context,
+                    expected_kinds,
+                )
             )
-    between_targets = {
-        (atom[0], atom[1]) for atom in expected if atom[2] == "between"
-    }
+    actual = _deduplicate_atoms(_coalesce_enum_exclusions(actual))
+    between_targets = {(atom[0], atom[1]) for atom in expected if atom[2] == "between"}
     actual = _coalesce_closed_ranges(actual, between_targets)
 
     remaining = list(actual)
@@ -471,11 +477,14 @@ def _compare_offset(expression, differences):
 
 def _expected_predicate(predicate, plan):
     if isinstance(predicate, EnumPredicate):
+        operator = (
+            "set_include" if predicate.operator in {"eq", "in"} else "set_exclude"
+        )
         return (
             "where",
             f"col:{predicate.column_id.casefold()}",
-            predicate.operator,
-            tuple(str(value) for value in predicate.canonical_values),
+            operator,
+            canonical_set_values(predicate.canonical_values),
         )
     if isinstance(predicate, NumericPredicate):
         target = (
@@ -509,6 +518,78 @@ def _expected_predicate(predicate, plan):
     else:
         sql_operator, values = "lte", (str(end),)
     return ("where", f"col:{predicate.column_id.casefold()}", sql_operator, values)
+
+
+def _sql_predicates(node, clause, context, expected_kinds):
+    atoms = []
+    for item in _flatten_and(node):
+        folded = _fold_supported_or(item, clause, context, expected_kinds)
+        if folded is not None:
+            atoms.append(folded)
+            continue
+        atom = _sql_predicate(_unwrap_parens(item), clause, context)
+        atoms.append(_canonicalize_sql_atom(atom, expected_kinds))
+    return atoms
+
+
+def _fold_supported_or(node, clause, context, expected_kinds):
+    inner = _unwrap_parens(node)
+    if not isinstance(inner, exp.Or):
+        return None
+    atoms = [
+        _canonicalize_sql_atom(
+            _sql_predicate(_unwrap_parens(item), clause, context),
+            expected_kinds,
+        )
+        for item in _flatten_or(inner)
+    ]
+    first = atoms[0]
+    if first[2] != "set_include" or any(atom[:3] != first[:3] for atom in atoms[1:]):
+        return None
+    return (
+        *first[:3],
+        canonical_set_values(value for atom in atoms for value in atom[3]),
+    )
+
+
+def _canonicalize_sql_atom(atom, expected_kinds):
+    clause, target, operator, values = atom
+    if expected_kinds.get((clause, target)) != "enum":
+        return atom
+    if operator in {"eq", "in"}:
+        operator = "set_include"
+    elif operator in {"neq", "not_in"}:
+        operator = "set_exclude"
+    return (clause, target, operator, canonical_set_values(values))
+
+
+def _coalesce_enum_exclusions(atoms):
+    grouped: dict[tuple[str, str, str], list[str]] = {}
+    first_indexes: dict[tuple[str, str, str], int] = {}
+    passthrough: list[tuple[int, tuple]] = []
+    for index, atom in enumerate(atoms):
+        if atom[2] != "set_exclude":
+            passthrough.append((index, atom))
+            continue
+        key = atom[:3]
+        first_indexes.setdefault(key, index)
+        grouped.setdefault(key, []).extend(atom[3])
+    passthrough.extend(
+        (
+            first_indexes[key],
+            (*key, canonical_set_values(values)),
+        )
+        for key, values in grouped.items()
+    )
+    return [atom for _, atom in sorted(passthrough, key=lambda item: item[0])]
+
+
+def _deduplicate_atoms(atoms):
+    values = []
+    for atom in atoms:
+        if atom not in values:
+            values.append(atom)
+    return values
 
 
 def _sql_predicate(node, clause, context):
@@ -656,6 +737,19 @@ def _flatten_and(node):
     return [node]
 
 
+def _flatten_or(node):
+    inner = _unwrap_parens(node)
+    if isinstance(inner, exp.Or):
+        return [*_flatten_or(inner.left), *_flatten_or(inner.right)]
+    return [inner]
+
+
+def _unwrap_parens(node):
+    while isinstance(node, exp.Paren):
+        node = node.this
+    return node
+
+
 def _literal(node) -> str:
     if not isinstance(node, exp.Literal):
         return f"expression:{node.sql(dialect='mysql').casefold()}"
@@ -664,13 +758,9 @@ def _literal(node) -> str:
 
 def _number(value: str) -> str:
     try:
-        number = Decimal(value)
-    except InvalidOperation:
+        return canonical_number(value)
+    except InvalidOperation, ValueError:
         return str(value)
-    if number == 0:
-        return "0"
-    text = format(number.normalize(), "f")
-    return text.rstrip("0").rstrip(".") if "." in text else text
 
 
 def _reverse_operator(operator):

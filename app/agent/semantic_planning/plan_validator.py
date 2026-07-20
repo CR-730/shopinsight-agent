@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 from datetime import date
-from decimal import Decimal, InvalidOperation
+from decimal import InvalidOperation
 
+from app.agent.predicate_normalization import canonical_number
 from app.agent.schema_relations import (
     build_relationship_graph,
     find_unique_shortest_join_closure,
@@ -21,6 +22,9 @@ from app.agent.semantic_planning.plan import (
     SemanticQueryPlan,
     TemporalPredicate,
 )
+from app.agent.semantic_planning.predicate_normalization import (
+    normalize_plan_predicates,
+)
 from app.agent.semantic_planning.resolvers.join import ResolvedJoinPreference
 
 _NUMERIC_TYPES = ("int", "decimal", "numeric", "float", "double", "real")
@@ -33,6 +37,14 @@ def validate_plan(
     join_preferences: tuple[ResolvedJoinPreference, ...] = (),
 ) -> SemanticPlanningResult:
     """Return a fully materialized plan or no plan at all."""
+
+    normalization = normalize_plan_predicates(plan.predicates)
+    if normalization.issues:
+        return SemanticPlanningResult(
+            status="unresolved",
+            issues=list(normalization.issues),
+        )
+    plan = plan.model_copy(update={"predicates": list(normalization.predicates)})
 
     issues: list[PlanningIssue] = []
     if plan.version != "1":
@@ -66,9 +78,7 @@ def validate_plan(
             or measure.expression != metric.expression
             or tuple(measure.source_column_ids) != metric.relevant_columns
         ):
-            issues.append(
-                _issue("metric_definition_mismatch", [measure.metric_id])
-            )
+            issues.append(_issue("metric_definition_mismatch", [measure.metric_id]))
             continue
         missing_columns = [
             column_id
@@ -91,9 +101,7 @@ def validate_plan(
             continue
         if dimension.role == "projection":
             if not column.projectable:
-                issues.append(
-                    _issue("projection_not_allowed", [dimension.column_id])
-                )
+                issues.append(_issue("projection_not_allowed", [dimension.column_id]))
                 continue
             has_projection = True
         selected_dimensions.add(dimension.column_id)
@@ -118,14 +126,10 @@ def validate_plan(
 
     for order in plan.order_by:
         selected = (
-            selected_measures
-            if order.target_type == "measure"
-            else selected_dimensions
+            selected_measures if order.target_type == "measure" else selected_dimensions
         )
         if order.target_id not in selected:
-            issues.append(
-                _issue("order_target_not_selected", [order.target_id])
-            )
+            issues.append(_issue("order_target_not_selected", [order.target_id]))
     if plan.limit is not None and not 1 <= plan.limit <= 1000:
         issues.append(_issue("limit_out_of_range"))
 
@@ -241,20 +245,16 @@ def _validate_numeric(
     if len(predicate.values) != expected_count:
         issues.append(_issue("numeric_boundary_count_invalid", [predicate.target_id]))
     try:
-        [Decimal(value) for value in predicate.values]
-    except (InvalidOperation, ValueError):
+        [canonical_number(value) for value in predicate.values]
+    except InvalidOperation, ValueError:
         issues.append(_issue("numeric_value_invalid", [predicate.target_id]))
 
     if predicate.target_type == "measure":
         if predicate.target_id not in selected_measures:
-            issues.append(
-                _issue("numeric_target_not_selected", [predicate.target_id])
-            )
+            issues.append(_issue("numeric_target_not_selected", [predicate.target_id]))
             return
         if predicate.clause != "having":
-            issues.append(
-                _issue("numeric_clause_mismatch", [predicate.target_id])
-            )
+            issues.append(_issue("numeric_clause_mismatch", [predicate.target_id]))
         metric = catalog.metrics[predicate.target_id]
         required_columns.update(metric.relevant_columns)
         return
@@ -267,9 +267,7 @@ def _validate_numeric(
         column.data_type.strip().casefold().startswith(prefix)
         for prefix in _NUMERIC_TYPES
     ):
-        issues.append(
-            _issue("numeric_target_type_invalid", [predicate.target_id])
-        )
+        issues.append(_issue("numeric_target_type_invalid", [predicate.target_id]))
     if predicate.clause != "where":
         issues.append(_issue("numeric_clause_mismatch", [predicate.target_id]))
     required_columns.add(predicate.target_id)

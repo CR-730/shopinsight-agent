@@ -97,6 +97,32 @@ def _codes(sql):
     }
 
 
+def _multi_value_enum_plan():
+    plan = deepcopy(_plan())
+    for predicate in plan["predicates"]:
+        if predicate["kind"] != "enum":
+            continue
+        predicate.update(
+            operator="in",
+            canonical_values=["华北", "华南"],
+            allowed_sql_literals=["华北", "华南"],
+        )
+    return plan
+
+
+def _excluded_enum_plan():
+    plan = deepcopy(_plan())
+    for predicate in plan["predicates"]:
+        if predicate["kind"] != "enum":
+            continue
+        predicate.update(
+            operator="not_in",
+            canonical_values=["华北", "华南"],
+            allowed_sql_literals=["华北", "华南"],
+        )
+    return plan
+
+
 def test_accepts_exact_metric_dimension_predicates_join_order_and_limit():
     result = validate_sql_plan_consistency(BASE_SQL, _plan())
 
@@ -177,6 +203,75 @@ def test_accepts_closed_bounds_equivalent_to_between():
     )
 
     assert validate_sql_plan_consistency(sql, _plan()).ok is True
+
+
+def test_accepts_reordered_and_duplicated_in_values():
+    sql = BASE_SQL.replace(
+        "dr.region_name = '华北'",
+        "dr.region_name IN ('华南', '华北', '华南')",
+    )
+
+    assert validate_sql_plan_consistency(sql, _multi_value_enum_plan()).ok is True
+
+
+def test_accepts_enum_eq_as_singleton_in():
+    sql = BASE_SQL.replace(
+        "dr.region_name = '华北'",
+        "dr.region_name IN ('华北')",
+    )
+
+    assert validate_sql_plan_consistency(sql, _plan()).ok is True
+
+
+def test_accepts_same_target_eq_or_as_multi_value_in():
+    sql = BASE_SQL.replace(
+        "dr.region_name = '华北'",
+        "(dr.region_name = '华北' OR dr.region_name = '华南')",
+    )
+
+    assert validate_sql_plan_consistency(sql, _multi_value_enum_plan()).ok is True
+
+
+def test_rejects_distinct_singleton_in_joined_by_and():
+    sql = BASE_SQL.replace(
+        "dr.region_name = '华北'",
+        "dr.region_name IN ('华北') AND dr.region_name IN ('华南')",
+    )
+
+    result = validate_sql_plan_consistency(sql, _multi_value_enum_plan())
+
+    assert result.ok is False
+    assert {difference.code for difference in result.differences} & {
+        "enum_predicate_mismatch",
+        "enum_predicate_missing",
+    }
+
+
+def test_rejects_or_across_different_targets():
+    sql = BASE_SQL.replace(
+        "dr.region_name = '华北'",
+        "(dr.region_name = '华北' OR fo.order_amount = 100)",
+    )
+
+    assert validate_sql_plan_consistency(sql, _plan()).ok is False
+
+
+def test_accepts_equivalent_enum_exclusions_joined_by_and():
+    sql = BASE_SQL.replace(
+        "dr.region_name = '华北'",
+        "dr.region_name <> '华北' AND dr.region_name NOT IN ('华南')",
+    )
+
+    assert validate_sql_plan_consistency(sql, _excluded_enum_plan()).ok is True
+
+
+def test_rejects_enum_exclusions_joined_by_or():
+    sql = BASE_SQL.replace(
+        "dr.region_name = '华北'",
+        "(dr.region_name <> '华北' OR dr.region_name <> '华南')",
+    )
+
+    assert validate_sql_plan_consistency(sql, _excluded_enum_plan()).ok is False
 
 
 def test_rejects_offset_not_represented_in_plan():

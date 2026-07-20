@@ -8,11 +8,14 @@ from decimal import Decimal
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import PromptTemplate
 from langgraph.runtime import Runtime
+from sqlglot import parse_one
+from sqlglot.errors import ParseError
 
 from app.agent.context import DataAgentContext
 from app.agent.failure import build_failure
 from app.agent.llm import llm
 from app.agent.llm_usage import ainvoke_llm_with_usage
+from app.agent.predicate_normalization import stable_fingerprint
 from app.agent.sql.plan_consistency import validate_sql_plan_consistency
 from app.agent.sql.sql_correction import correct_sql_candidate
 from app.agent.sql.sql_executor import SqlExecutionRequest, SqlExecutor
@@ -33,7 +36,12 @@ async def sql_executor(state: DataAgentState, runtime: Runtime[DataAgentContext]
     last_validation_error = ""
     correction_attempts = 0
     max_correction_attempts = app_config.agent.max_sql_correction_attempts
+    seen_sql_fingerprints: set[str] = set()
+    previous_difference_fingerprint: str | None = None
     for _ in range(max(1, max_correction_attempts + 1)):
+        sql_fingerprint = _sql_fingerprint(current_state["sql"])
+        sql_repeated = sql_fingerprint in seen_sql_fingerprints
+        seen_sql_fingerprints.add(sql_fingerprint)
         validation = await _pre_validate_sql(current_state, executor)
         current_state["sql"] = validation["sql"]
         accumulated_update["sql"] = validation["sql"]
@@ -64,6 +72,26 @@ async def sql_executor(state: DataAgentState, runtime: Runtime[DataAgentContext]
                     disposition="blocked",
                 ),
             }
+
+        difference_fingerprint = stable_fingerprint(
+            {
+                "differences": plan_differences,
+                "validation_error": last_validation_error,
+            }
+        )
+        if difference_fingerprint == previous_difference_fingerprint:
+            return _stopped_correction(
+                accumulated_update,
+                last_validation_error,
+                "differences_unchanged",
+            )
+        if sql_repeated:
+            return _stopped_correction(
+                accumulated_update,
+                last_validation_error,
+                "sql_cycle",
+            )
+        previous_difference_fingerprint = difference_fingerprint
 
         if correction_attempts >= max_correction_attempts:
             return {
@@ -194,6 +222,35 @@ def _correction_failure(message: str) -> dict:
         message=message or "SQL 校验失败",
         disposition="failed",
     )
+
+
+def _stopped_correction(
+    accumulated_update: dict,
+    message: str,
+    reason: str,
+) -> dict:
+    return {
+        **accumulated_update,
+        "trace": {
+            **(accumulated_update.get("trace") or {}),
+            "sql_correction_stop_reason": reason,
+        },
+        "failure": _correction_failure(message),
+    }
+
+
+def _sql_fingerprint(sql: str) -> str:
+    normalized = normalize_sql_for_execution(sql)
+    try:
+        expression = parse_one(normalized, read="mysql")
+        normalized = expression.sql(
+            dialect="mysql",
+            pretty=False,
+            normalize=True,
+        )
+    except ParseError, ValueError:
+        pass
+    return stable_fingerprint(normalized)
 
 
 def _result_meta(state: dict) -> dict:
