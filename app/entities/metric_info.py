@@ -6,6 +6,17 @@
 """
 
 from dataclasses import dataclass
+from typing import Literal
+
+MetricAggregation = Literal[
+    "sum",
+    "avg",
+    "count",
+    "count_distinct",
+    "min",
+    "max",
+    "expression",
+]
 
 
 @dataclass
@@ -18,3 +29,5 @@ class MetricInfo:
     # 指标依赖的底层字段列表，例如 GMV 依赖 fact_order.order_amount
     relevant_columns: list[str]
     alias: list[str]
+    aggregation: MetricAggregation
+    expression: str | None = None

@@ -99,6 +99,8 @@ def ablation_specs() -> list[AblationRunSpec]:
             ablation_options={
                 "disable_non_sql_llm_cache": True,
                 "disable_embedding_cache": True,
+                # This disables pruning only: Meta authority checks, required/JOIN
+                # enrichment, and runtime date/database context remain enabled.
                 "disable_context_compaction": True,
             },
         ),

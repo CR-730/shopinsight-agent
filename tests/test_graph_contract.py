@@ -21,15 +21,17 @@ def test_sql_memory_recall_runs_only_after_intent_recognition_continue():
     assert not any(edge[0] == "add_extra_context" for edge in edges)
 
 
-def test_graph_exposes_single_context_compaction_node():
+def test_graph_exposes_semantic_planning_node():
     edges = {
         (edge.source, edge.target, edge.data, edge.conditional)
         for edge in graph.get_graph().edges
     }
 
-    assert ("business_binding", "context_compaction", "continue", True) in edges
-    assert ("business_binding", "__end__", "blocked", True) in edges
-    assert ("context_compaction", "generate_sql", None, False) in edges
+    assert ("context_builder", "semantic_planning", None, False) in edges
+    assert ("semantic_planning", "context_compaction", "continue", True) in edges
+    assert ("semantic_planning", "__end__", "blocked", True) in edges
+    assert ("context_compaction", "generate_sql", "continue", True) in edges
+    assert ("context_compaction", "__end__", "blocked", True) in edges
 
 
 def test_graph_exposes_single_sql_executor_node():

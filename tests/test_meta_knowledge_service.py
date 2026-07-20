@@ -2,6 +2,8 @@ from pathlib import Path
 
 import pytest
 
+from app.conf.meta_config import MetaConfig, MetricConfig
+from app.entities.metric_info import MetricInfo
 from app.services.meta_knowledge_service import MetaKnowledgeService
 
 
@@ -26,7 +28,8 @@ class FakeDWRepository:
 
 
 class FakeEmbeddingClient:
-    pass
+    async def aembed_documents(self, texts):
+        return [[float(index)] for index, _ in enumerate(texts)]
 
 
 class FakeQdrantRepository:
@@ -96,3 +99,90 @@ async def test_empty_meta_config_clears_all_search_indexes(tmp_path, monkeypatch
         (MetaKnowledgeService._build_version(config_path), config_path)
     ]
     assert cleared_llm_cache is True
+
+
+class _Transaction:
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, traceback):
+        return False
+
+
+class _Session:
+    def begin(self):
+        return _Transaction()
+
+
+class _MetricMetaRepository(FakeMetaRepository):
+    def __init__(self):
+        super().__init__()
+        self.session = _Session()
+        self.saved_metrics = []
+        self.saved_column_metrics = []
+
+    def save_metric_infos(self, metrics):
+        self.saved_metrics.extend(metrics)
+
+    def save_column_metrics(self, column_metrics):
+        self.saved_column_metrics.extend(column_metrics)
+
+
+def _metric_service(meta_repository=None, metric_repository=None):
+    return MetaKnowledgeService(
+        meta_mysql_repository=meta_repository or _MetricMetaRepository(),
+        dw_mysql_repository=FakeDWRepository(),
+        column_qdrant_repository=FakeQdrantRepository(),
+        embedding_client=FakeEmbeddingClient(),
+        value_es_repository=FakeValueRepository(),
+        value_qdrant_repository=FakeQdrantRepository(),
+        metric_qdrant_repository=metric_repository or FakeQdrantRepository(),
+    )
+
+
+@pytest.mark.anyio
+async def test_metric_definition_is_validated_before_meta_write():
+    repository = _MetricMetaRepository()
+    service = _metric_service(meta_repository=repository)
+    config = MetaConfig(
+        metrics=[
+            MetricConfig(
+                name="GMV",
+                description="销售额",
+                relevant_columns=["fact_order.order_amount"],
+                alias=["销售额"],
+                aggregation="median",
+            )
+        ]
+    )
+
+    with pytest.raises(ValueError, match="unsupported_metric_aggregation"):
+        await service._save_metrics_to_meta_db(config)
+
+    assert repository.saved_metrics == []
+    assert repository.saved_column_metrics == []
+
+
+@pytest.mark.anyio
+async def test_metric_qdrant_payload_keeps_authoritative_semantics():
+    metric_repository = FakeQdrantRepository()
+    service = _metric_service(metric_repository=metric_repository)
+    metric = MetricInfo(
+        id="GMV",
+        name="GMV",
+        description="销售额",
+        relevant_columns=["fact_order.order_amount"],
+        alias=["销售额"],
+        aggregation="sum",
+        expression=None,
+    )
+
+    await service._save_metrics_to_qdrant([metric], "build-v1")
+
+    _, _, payloads = metric_repository.upserts[0]
+    assert all(payload["aggregation"] == "sum" for payload in payloads)
+    assert all(payload["expression"] is None for payload in payloads)
+    assert all(
+        payload["relevant_columns"] == ["fact_order.order_amount"]
+        for payload in payloads
+    )

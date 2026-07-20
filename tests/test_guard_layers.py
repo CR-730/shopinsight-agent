@@ -1,12 +1,12 @@
 ﻿import asyncio
 
 from app.agent.nodes import intent_recognition as intent_recognition_module
-from app.agent.nodes.business_binding import validate_business_binding_state
 from app.agent.nodes.intent_recognition import (
-    _should_block_classifier_result,
+    _is_block_decision,
     classify_query_intent,
     intent_recognition,
 )
+from app.agent.schema_relations import is_valid_join_pair
 from app.agent.sql.sql_guard import (
     normalize_sql_for_execution,
     repair_invalid_join_relationship,
@@ -14,6 +14,25 @@ from app.agent.sql.sql_guard import (
     validate_sql_structure_semantics,
 )
 from app.agent.stop_signal import split_stop_signal
+from app.entities.value_info import ValueInfo
+
+
+def _semantic_plan(**overrides):
+    plan = {
+        "version": "1.0",
+        "metadata_version": "test-v1",
+        "measures": [],
+        "dimensions": [],
+        "predicates": [],
+        "order_by": [],
+        "limit": None,
+        "joins": [],
+        "required_table_ids": [],
+        "required_column_ids": [],
+        "provenance": [],
+    }
+    plan.update(overrides)
+    return plan
 
 
 def test_split_stop_signal_strips_marker_from_user_visible_text():
@@ -27,16 +46,45 @@ def test_split_stop_signal_strips_marker_from_user_visible_text():
 
 def test_intent_recognition_blocks_when_classifier_fails():
     assert (
-        _should_block_classifier_result(
+        _is_block_decision(
             {
-                "attack_type": "classifier_error",
-                "risk_level": "high",
-                "should_block": True,
-                "reason": "classifier_failed",
+                "decision": "block",
+                "category": "classifier_error",
+                "user_message": "入口检查暂时不可用。",
             }
         )
         is True
     )
+
+
+def test_intent_recognition_allows_clear_data_query_without_business_keyword_rules():
+    result = {
+        "decision": "allow",
+        "category": "safe",
+        "user_message": "",
+    }
+
+    assert _is_block_decision(result) is False
+
+
+def test_intent_recognition_blocks_missing_query_object():
+    result = {
+        "decision": "block",
+        "category": "missing_query_object",
+        "user_message": "请补充要查询的指标或业务对象。",
+    }
+
+    assert _is_block_decision(result) is True
+
+
+def test_intent_recognition_blocks_prompt_injection():
+    result = {
+        "decision": "block",
+        "category": "prompt_injection",
+        "user_message": "无法处理该请求。",
+    }
+
+    assert _is_block_decision(result) is True
 
 
 def test_intent_recognition_classifier_failure_returns_block_decision(monkeypatch):
@@ -50,8 +98,8 @@ def test_intent_recognition_classifier_failure_returns_block_decision(monkeypatc
 
     result = asyncio.run(classify_query_intent("统计销售额", Runtime()))
 
-    assert result["should_block"] is True
-    assert result["attack_type"] == "classifier_error"
+    assert result["decision"] == "block"
+    assert result["category"] == "classifier_error"
 
 
 def test_intent_recognition_streams_llm_text_without_stop_marker(monkeypatch):
@@ -63,11 +111,9 @@ def test_intent_recognition_streams_llm_text_without_stop_marker(monkeypatch):
 
     async def fake_classify_query_intent(query, runtime):
         return {
-            "is_prompt_injection": False,
-            "attack_type": "out_of_scope",
-            "risk_level": "medium",
-            "should_block": True,
-            "reason": "我理解你是在问天气，但我只能处理电商经营数据查询。find_error",
+            "decision": "block",
+            "category": "clearly_non_data",
+            "user_message": "我理解你是在问天气，但我只能处理电商经营数据查询。",
         }
 
     monkeypatch.setattr(
@@ -86,7 +132,7 @@ def test_intent_recognition_streams_llm_text_without_stop_marker(monkeypatch):
     assert "find_error" not in text
 
 
-def test_intent_recognition_reports_intent_recognition_step(monkeypatch):
+def test_intent_recognition_reports_step_without_generating_user_response(monkeypatch):
     events = []
 
     class Runtime:
@@ -95,12 +141,9 @@ def test_intent_recognition_reports_intent_recognition_step(monkeypatch):
 
     async def fake_classify_query_intent(query, runtime):
         return {
-            "is_prompt_injection": False,
-            "attack_type": "none",
-            "risk_level": "low",
-            "should_block": False,
-            "reason": "",
-            "user_response": "我将统计销售额相关经营数据。",
+            "decision": "allow",
+            "category": "safe",
+            "user_message": "",
         }
 
     monkeypatch.setattr(
@@ -115,43 +158,7 @@ def test_intent_recognition_reports_intent_recognition_step(monkeypatch):
     assert result == {"failure": None}
     assert events[0] == {"type": "progress", "step": "意图识别", "status": "running"}
     assert events[-1] == {"type": "progress", "step": "意图识别", "status": "success"}
-    assert "我将统计销售额相关经营数据。" in text
-
-
-def test_business_binding_blocks_unresolved_binding():
-    error = validate_business_binding_state(
-        {
-            "business_binding": {
-                "unresolved": [
-                    {
-                        "type": "metric",
-                        "raw_text": "品牌心智指数",
-                        "reason": "metric_not_bound",
-                    }
-                ]
-            }
-        }
-    )
-
-    assert error is not None
-    assert "business_binding unresolved" in error
-    assert "metric=" in error
-    assert "metric_not_bound" in error
-
-
-def test_business_binding_passes_when_binding_is_complete():
-    error = validate_business_binding_state(
-        {
-            "business_binding": {
-                "metrics": [{"canonical_metric": "GMV"}],
-                "filters": [{"canonical_value": "华北"}],
-                "unresolved": [],
-                "ambiguous": [],
-            }
-        }
-    )
-
-    assert error is None
+    assert text == ""
 
 
 def test_pre_sql_execution_validation_blocks_sensitive_detail_sql():
@@ -325,6 +332,17 @@ def test_pre_sql_execution_validation_allows_valid_join_relationship():
     assert error is None
 
 
+def test_schema_relation_join_rule_matches_sql_guard_contract():
+    assert is_valid_join_pair(
+        {"name": "region_id", "role": "foreign_key", "table_id": "fact_order"},
+        {"name": "region_id", "role": "primary_key", "table_id": "dim_region"},
+    )
+    assert not is_valid_join_pair(
+        {"name": "region_id", "role": "foreign_key", "table_id": "fact_order"},
+        {"name": "region_name", "role": "primary_key", "table_id": "dim_region"},
+    )
+
+
 def test_pre_sql_execution_validation_blocks_multi_statement_sql():
     sql = "SELECT COUNT(*) AS 订单数 FROM fact_order; SELECT * FROM dim_customer"
 
@@ -341,20 +359,52 @@ def test_pre_sql_execution_validation_blocks_projection_star_by_ast():
     assert error == "禁止 SELECT *"
 
 
-def test_pre_sql_execution_validation_allows_semantically_validated_literal():
+def test_sql_guard_accepts_semantic_plan_literal_without_retrieval_value():
     sql = "SELECT SUM(order_amount) AS GMV FROM fact_order WHERE region_name = '华北'"
 
     error = validate_sql_before_execution(
         {
             "query": "华北 GMV",
-            "business_binding": {
-                "filters": [{"allowed_sql_literals": ["华北"]}],
-            },
+            "semantic_plan": _semantic_plan(
+                predicates=[
+                    {
+                        "kind": "enum",
+                        "column_id": "dim_region.region_name",
+                        "operator": "eq",
+                        "canonical_values": ["华北"],
+                        "allowed_sql_literals": ["华北"],
+                    }
+                ]
+            ),
+            "retrieval_context": {"values": []},
         },
         sql,
     )
 
     assert error is None
+
+
+def test_sql_guard_rejects_retrieved_literal_not_authorized_by_plan():
+    sql = "SELECT SUM(order_amount) FROM fact_order WHERE region_name = '华北'"
+
+    error = validate_sql_before_execution(
+        {
+            "query": "查询销售额",
+            "semantic_plan": _semantic_plan(),
+            "retrieval_context": {
+                "values": [
+                    ValueInfo(
+                        id="dim_region.region_name.华北",
+                        value="华北",
+                        column_id="dim_region.region_name",
+                    )
+                ]
+            },
+        },
+        sql,
+    )
+
+    assert error == "SQL 使用了未授权的枚举值：华北"
 
 
 def test_pre_sql_execution_validation_allows_date_literals():

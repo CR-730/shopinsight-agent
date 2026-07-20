@@ -84,7 +84,7 @@ def test_eval_cases_110_positive_and_guard_cases_are_scored_differently():
         if case.expected_blocked_by:
             assert "safety" in case.capabilities
             assert case.expected_result is None
-            assert case.expected_blocked_by in {"pre_rag_guard", "business_binding"}
+            assert case.expected_blocked_by in {"pre_rag_guard", "semantic_planning"}
             assert not case.expected_sql_contains
             assert not case.expected_columns
         else:
@@ -102,4 +102,21 @@ def test_eval_cases_110_have_enough_context_labels_for_retrieval_scoring():
     assert sum(bool(case.expected_columns) for case in retrieval_cases) >= 45
     assert sum(bool(case.expected_metrics) for case in retrieval_cases) >= 40
     assert sum(bool(case.expected_values) for case in retrieval_cases) >= 25
-    assert sum("rag_value_hybrid_recall" in case.capabilities for case in retrieval_cases) >= 20
+    assert (
+        sum("rag_value_hybrid_recall" in case.capabilities for case in retrieval_cases)
+        >= 20
+    )
+
+
+def test_eval_cases_110_migrates_core_plans_and_legacy_issue_field():
+    cases = load_eval_cases(CASES_PATH)
+    by_id = {case.id: case for case in cases}
+
+    assert by_id["sql_topn_product_sales"].expected_semantic_plan["limit"] == 5
+    assert (
+        by_id["sql_time_range_quarter_region"].expected_semantic_plan["predicates"][0][
+            "column_id"
+        ]
+        == "fact_order.date_id"
+    )
+    assert all(case.expected_unresolved_binding is None for case in cases)

@@ -1,0 +1,43 @@
+- id: join_left_preserve_all_regions
+  query: 按地区统计销售额，保留所有地区，即使某个地区没有订单也要展示
+  suite: regression
+  difficulty: hard
+  capabilities: [semantic_planning, plan_consistency, sql_generation, sql_validation, tool_execution]
+  tags: [left_join, preserved_dimension, oracle]
+  risk_points: [误用内连接, LEFT保留侧反转]
+  expected_semantic_plan:
+    measures: [{metric_id: GMV, output_alias: 销售额}]
+    dimensions: [{column_id: dim_region.region_name, role: group_by, output_alias: 地区}]
+    joins: [{left_column_id: dim_region.region_id, right_column_id: fact_order.region_id, join_type: left}]
+    required_table_ids: [dim_region, fact_order]
+  expected_sql_plan_consistent: true
+  expected_result: {mode: non_empty}
+  oracle_sql: |
+    SELECT dr.region_name AS 地区, SUM(fo.order_amount) AS 销售额
+    FROM dim_region AS dr
+    LEFT JOIN fact_order AS fo ON dr.region_id = fo.region_id
+    GROUP BY dr.region_name
+  order_sensitive: false
+  timeout_seconds: 300
+
+- id: join_right_semantics_preserve_all_orders
+  query: 按地区统计销售额，保留所有订单，即使订单没有匹配到地区也要统计
+  suite: regression
+  difficulty: hard
+  capabilities: [semantic_planning, plan_consistency, sql_generation, sql_validation, tool_execution]
+  tags: [right_join_semantics, normalized_left_join, preserved_fact, oracle]
+  risk_points: [生成RIGHT JOIN, LEFT保留侧反转, 误用内连接]
+  expected_semantic_plan:
+    measures: [{metric_id: GMV, output_alias: 销售额}]
+    dimensions: [{column_id: dim_region.region_name, role: group_by, output_alias: 地区}]
+    joins: [{left_column_id: fact_order.region_id, right_column_id: dim_region.region_id, join_type: left}]
+    required_table_ids: [fact_order, dim_region]
+  expected_sql_plan_consistent: true
+  expected_result: {mode: non_empty}
+  oracle_sql: |
+    SELECT dr.region_name AS 地区, SUM(fo.order_amount) AS 销售额
+    FROM dim_region AS dr
+    RIGHT JOIN fact_order AS fo ON dr.region_id = fo.region_id
+    GROUP BY dr.region_name
+  order_sensitive: false
+  timeout_seconds: 300

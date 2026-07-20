@@ -1,6 +1,8 @@
 """Evaluation case loading, diagnostics, and rule-based scoring."""
 
 from dataclasses import asdict, dataclass, field
+from datetime import date, datetime
+from decimal import Decimal, InvalidOperation
 from typing import Any, Literal
 
 import yaml
@@ -9,6 +11,7 @@ FailureStage = Literal[
     "keyword_extraction",
     "rag_recall",
     "context_filter",
+    "semantic_planning",
     "sql_generation",
     "sql_validation",
     "tool_execution",
@@ -21,6 +24,7 @@ FAILURE_STAGE_ORDER: tuple[FailureStage, ...] = (
     "keyword_extraction",
     "rag_recall",
     "context_filter",
+    "semantic_planning",
     "sql_generation",
     "sql_validation",
     "tool_execution",
@@ -44,6 +48,12 @@ class EvalCase:
     expected_values: list[str] = field(default_factory=list)
     expected_time_binding: dict[str, Any] | None = None
     expected_unresolved_binding: dict[str, Any] | None = None
+    expected_semantic_plan: dict[str, Any] | None = None
+    expected_planning_issue: dict[str, Any] | None = None
+    expected_sql_plan_consistent: bool | None = None
+    oracle_sql: str | None = None
+    order_sensitive: bool = False
+    ablation_options: dict[str, bool] | None = None
     expected_result: Any = None
     expected_blocked_by: str | None = None
     forbidden_sql: list[str] = field(default_factory=list)
@@ -51,6 +61,13 @@ class EvalCase:
     forbidden_behavior: list[str] = field(default_factory=list)
     fatal_errors: list[str] = field(default_factory=list)
     timeout_seconds: int = 300
+
+    def __post_init__(self) -> None:
+        if (
+            self.expected_planning_issue is None
+            and self.expected_unresolved_binding is not None
+        ):
+            self.expected_planning_issue = dict(self.expected_unresolved_binding)
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -131,8 +148,7 @@ def build_trace(state: dict[str, Any]) -> dict[str, Any]:
     failure_message = str(failure.get("message") or "")
     sql_error = (
         failure_message
-        if failure_category == "sql_validation"
-        and failure_disposition == "failed"
+        if failure_category == "sql_validation" and failure_disposition == "failed"
         else None
     )
     safety_error = failure_message if failure_disposition == "blocked" else None
@@ -149,7 +165,8 @@ def build_trace(state: dict[str, Any]) -> dict[str, Any]:
         and failure_category in {"sql_execution", "system"}
         else None
     )
-    business_binding = state.get("business_binding") or {}
+    semantic_plan = state.get("semantic_plan") or {}
+    planning_issues = debug_trace.get("planning_issues") or []
 
     return {
         "exception_stage": exception_stage,
@@ -159,12 +176,10 @@ def build_trace(state: dict[str, Any]) -> dict[str, Any]:
         "retrieved_values": retrieved_values,
         "filtered_columns": filtered_columns,
         "filtered_metrics": filtered_metrics,
-        "metric_bindings": business_binding.get("metrics") or [],
-        "resolved_filters": business_binding.get("filters") or [],
-        "business_binding": business_binding,
-        "time_binding": business_binding.get("time"),
-        "unresolved_bindings": business_binding.get("unresolved") or [],
-        "ambiguous_bindings": business_binding.get("ambiguous") or [],
+        "semantic_plan": semantic_plan,
+        "planning_issues": planning_issues,
+        "sql_plan_consistency": debug_trace.get("sql_plan_consistency"),
+        "time_binding": _time_binding_from_plan(semantic_plan),
         "generated_sql": generated_sql,
         "sql_error": sql_error,
         "safety_error": safety_error,
@@ -321,6 +336,44 @@ def _evaluate_failures(case: EvalCase, trace: dict[str, Any]) -> list[EvalFailur
                 )
             )
 
+    if case.expected_semantic_plan is not None and not _semantic_plan_contains_subset(
+        trace["semantic_plan"], case.expected_semantic_plan
+    ):
+        failures.append(
+            EvalFailure(
+                code="semantic_plan_mismatch",
+                message="semantic_plan 与预期子集不一致",
+                stage="semantic_planning",
+            )
+        )
+
+    if case.expected_planning_issue and not _has_expected_planning_issue(
+        trace["planning_issues"], case.expected_planning_issue
+    ):
+        failures.append(
+            EvalFailure(
+                code="missing_expected_planning_issue",
+                message=f"缺少预期规划问题：{case.expected_planning_issue}",
+                stage="semantic_planning",
+            )
+        )
+
+    if case.expected_sql_plan_consistent is not None:
+        consistency = trace.get("sql_plan_consistency") or {}
+        actual_consistent = consistency.get("status") == "pass"
+        if actual_consistent != case.expected_sql_plan_consistent:
+            failures.append(
+                EvalFailure(
+                    code="sql_plan_consistency_mismatch",
+                    message=(
+                        "SQL 与 semantic_plan 一致性状态不符合预期："
+                        f"expected={case.expected_sql_plan_consistent}, "
+                        f"actual={actual_consistent}"
+                    ),
+                    stage="sql_validation",
+                )
+            )
+
     if case.expected_time_binding:
         time_binding = trace.get("time_binding") or {}
         for key, expected_value in case.expected_time_binding.items():
@@ -332,17 +385,6 @@ def _evaluate_failures(case: EvalCase, trace: dict[str, Any]) -> list[EvalFailur
                         stage="context_filter",
                     )
                 )
-
-    if case.expected_unresolved_binding and not _has_expected_binding_issue(
-        trace["unresolved_bindings"], case.expected_unresolved_binding
-    ):
-        failures.append(
-            EvalFailure(
-                code="missing_expected_unresolved_binding",
-                message=f"缺少预期未解析业务绑定：{case.expected_unresolved_binding}",
-                stage="safety",
-            )
-        )
 
     for tool in case.must_call_tools:
         if tool not in trace["tool_calls"]:
@@ -369,6 +411,25 @@ def _evaluate_failures(case: EvalCase, trace: dict[str, Any]) -> list[EvalFailur
                     stage="answer_generation",
                 )
             )
+        elif expected_mode != "non_empty":
+            expected_rows = (
+                case.expected_result.get("rows")
+                if isinstance(case.expected_result, dict)
+                else case.expected_result
+            )
+            plan_has_order = bool((trace.get("semantic_plan") or {}).get("order_by"))
+            if not results_match(
+                final_answer,
+                expected_rows,
+                order_sensitive=case.order_sensitive or plan_has_order,
+            ):
+                failures.append(
+                    EvalFailure(
+                        code="exact_result_mismatch",
+                        message="执行结果与精确预期不一致",
+                        stage="answer_generation",
+                    )
+                )
 
     return failures
 
@@ -385,13 +446,129 @@ def _is_empty_exception_trace(trace: dict[str, Any]) -> bool:
     )
 
 
-def _has_expected_binding_issue(
+def _has_expected_planning_issue(
     issues: list[dict[str, Any]], expected: dict[str, Any]
 ) -> bool:
     for issue in issues:
         if all(issue.get(key) == value for key, value in expected.items()):
             return True
     return False
+
+
+def _contains_subset(actual: Any, expected: Any) -> bool:
+    if isinstance(expected, dict):
+        return isinstance(actual, dict) and all(
+            key in actual and _contains_subset(actual[key], value)
+            for key, value in expected.items()
+        )
+    if isinstance(expected, list):
+        if not isinstance(actual, list):
+            return False
+        remaining = list(actual)
+        for expected_item in expected:
+            match_index = next(
+                (
+                    index
+                    for index, actual_item in enumerate(remaining)
+                    if _contains_subset(actual_item, expected_item)
+                ),
+                None,
+            )
+            if match_index is None:
+                return False
+            remaining.pop(match_index)
+        return True
+    return actual == expected
+
+
+def _semantic_plan_contains_subset(
+    actual: dict[str, Any], expected: dict[str, Any]
+) -> bool:
+    expected_without_joins = {
+        key: value for key, value in expected.items() if key != "joins"
+    }
+    if not _contains_subset(actual, expected_without_joins):
+        return False
+    expected_joins = expected.get("joins")
+    if expected_joins is None:
+        return True
+    actual_endpoints = [
+        frozenset(
+            {
+                str(item.get("left_column_id") or ""),
+                str(item.get("right_column_id") or ""),
+            }
+        )
+        for item in actual.get("joins") or []
+    ]
+    remaining = list(actual_endpoints)
+    for item in expected_joins:
+        endpoints = frozenset(
+            {
+                str(item.get("left_column_id") or ""),
+                str(item.get("right_column_id") or ""),
+            }
+        )
+        if endpoints not in remaining:
+            return False
+        remaining.remove(endpoints)
+    return True
+
+
+def results_match(
+    actual_rows: Any,
+    expected_rows: Any,
+    *,
+    order_sensitive: bool,
+) -> bool:
+    """Compare exact result rows while normalizing numeric representation."""
+
+    if not isinstance(actual_rows, list) or not isinstance(expected_rows, list):
+        return False
+    actual = [_canonical_value(row) for row in actual_rows]
+    expected = [_canonical_value(row) for row in expected_rows]
+    if order_sensitive:
+        return actual == expected
+    return sorted(actual, key=repr) == sorted(expected, key=repr)
+
+
+def _canonical_value(value: Any) -> Any:
+    if isinstance(value, bool) or value is None:
+        return value
+    if isinstance(value, (Decimal, int, float)):
+        try:
+            number = Decimal(str(value))
+        except InvalidOperation:
+            return ("number", str(value))
+        return ("number", format(number.normalize(), "f"))
+    if isinstance(value, (date, datetime)):
+        return ("datetime", value.isoformat())
+    if isinstance(value, dict):
+        return tuple(
+            (str(key), _canonical_value(item))
+            for key, item in sorted(value.items(), key=lambda pair: str(pair[0]))
+        )
+    if isinstance(value, (list, tuple)):
+        return tuple(_canonical_value(item) for item in value)
+    return ("scalar", str(value))
+
+
+def _time_binding_from_plan(plan: dict[str, Any]) -> dict[str, Any] | None:
+    temporal = next(
+        (
+            predicate
+            for predicate in plan.get("predicates") or []
+            if predicate.get("kind") == "temporal"
+        ),
+        None,
+    )
+    if temporal is None:
+        return None
+    result = dict(temporal)
+    start_date = str(temporal.get("start_date") or "")
+    if len(start_date) >= 4 and start_date[:4].isdigit():
+        result["year"] = int(start_date[:4])
+    return result
 
 
 def _first_failure_stage(failures: list[EvalFailure]) -> FailureStage | None:
@@ -455,9 +632,13 @@ def _infer_tool_calls(state: dict[str, Any]) -> list[str]:
         calls.add("hybrid.value.search")
         calls.add("es.value.search")
         calls.add("qdrant.value.search")
+    if state.get("semantic_plan") or debug_trace.get("planning_issues") is not None:
+        calls.add("semantic_planning")
     if state.get("sql"):
         calls.add("llm.sql.generate")
-        calls.add("mysql.dw.validate")
+        consistency = debug_trace.get("sql_plan_consistency") or {}
+        if consistency.get("status") != "failed":
+            calls.add("mysql.dw.validate")
     failure = state.get("failure") or {}
     if failure.get("disposition") == "blocked":
         calls.add(_normalize_stage_alias(failure.get("stage") or "safety_guard"))
@@ -483,6 +664,6 @@ def _stage_for_tool(tool: str) -> FailureStage:
         return "tool_execution"
     if tool.startswith("llm.sql"):
         return "sql_generation"
-    if tool.startswith("business_binding"):
-        return "safety"
+    if tool.startswith("semantic_planning"):
+        return "semantic_planning"
     return "tool_execution"

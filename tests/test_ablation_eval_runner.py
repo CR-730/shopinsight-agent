@@ -42,15 +42,23 @@ def test_ablation_specs_keep_retrieval_basic_without_sql_memory_or_value_recall(
         "disable_value_recall": True,
     }
     assert specs[("retrieval", "retrieval_full")].ablation_options == {}
-    assert specs[("cost", "unoptimized")].ablation_options[
-        "disable_non_sql_llm_cache"
-    ] is True
-    assert specs[("cost", "unoptimized")].ablation_options[
-        "disable_embedding_cache"
-    ] is True
-    assert specs[("cost", "unoptimized")].ablation_options[
-        "disable_context_compaction"
-    ] is True
+    assert (
+        specs[("cost", "unoptimized")].ablation_options["disable_non_sql_llm_cache"]
+        is True
+    )
+    assert (
+        specs[("cost", "unoptimized")].ablation_options["disable_embedding_cache"]
+        is True
+    )
+    assert (
+        specs[("cost", "unoptimized")].ablation_options["disable_context_compaction"]
+        is True
+    )
+    assert set(specs[("cost", "unoptimized")].ablation_options) == {
+        "disable_non_sql_llm_cache",
+        "disable_embedding_cache",
+        "disable_context_compaction",
+    }
 
 
 def test_selected_ablation_specs_filters_phase_and_variant():
@@ -97,14 +105,27 @@ def test_seed_memory_only_saves_successful_bound_sql():
     final_state = {
         "sql": "select sum(order_amount) from fact_order",
         "output": {"rows": [{"GMV": 1}]},
-        "business_binding": {
-            "metrics": [
+        "semantic_plan": {
+            "version": "1",
+            "metadata_version": "meta-v1",
+            "measures": [
                 {
-                    "raw_mention": "销售额",
-                    "canonical_metric": "GMV",
-                    "relevant_columns": ["fact_order.order_amount"],
+                    "metric_id": "GMV",
+                    "name": "GMV",
+                    "aggregation": "sum",
+                    "expression": None,
+                    "source_column_ids": ["fact_order.order_amount"],
+                    "output_alias": "GMV",
                 }
-            ]
+            ],
+            "dimensions": [],
+            "predicates": [],
+            "order_by": [],
+            "limit": None,
+            "joins": [],
+            "required_table_ids": ["fact_order"],
+            "required_column_ids": ["fact_order.order_amount"],
+            "provenance": [],
         },
     }
 
@@ -121,7 +142,9 @@ def test_seed_memory_only_saves_successful_bound_sql():
     assert saved is True
     assert repository.saved[0]["user_id"] == "ablation-seed:test"
     assert repository.saved[0]["metadata_cache_version"] == "meta-v1"
-    assert repository.saved[0]["args"]["sql"] == "select sum(order_amount) from fact_order"
+    assert (
+        repository.saved[0]["args"]["sql"] == "select sum(order_amount) from fact_order"
+    )
 
 
 def test_seed_memory_rejects_unbound_successful_sql():

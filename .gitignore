@@ -55,6 +55,8 @@ testem.log
 /logs/
 /eval/runs/
 /.codex-references/
+/.worktrees/
+/docs/superpowers/plans/
 
 # System
 .DS_Store

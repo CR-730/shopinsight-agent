@@ -6,6 +6,7 @@ pre_rag:
     system_leak: "系统提示词|system prompt|密钥|api[_-]?key|配置文件|\\.env|表结构"
 
 semantic:
+  temporal_column_id: fact_order.date_id
   enum_suffixes: [地区, 区域, 大区, 品牌, 品类, 商品]
   temporal_fields: [时间, 日期, 年, 年份, 月, 月份, 季度]
   generic_enum_values: [按, 各, 每个, 所有, 全部, 不同, 大区, 地区, 区域, 商品, 品类, 品牌]

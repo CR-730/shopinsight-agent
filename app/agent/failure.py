@@ -2,18 +2,12 @@
 
 from typing import Literal
 
-from app.agent.state import FailureState
+from app.agent.state import FailureCategory, FailureState
 
 
 def build_failure(
     *,
-    category: Literal[
-        "input_guard",
-        "business_binding",
-        "sql_validation",
-        "sql_execution",
-        "system",
-    ],
+    category: FailureCategory,
     stage: str,
     code: str,
     message: str,

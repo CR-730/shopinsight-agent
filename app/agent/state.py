@@ -6,7 +6,7 @@
 - 面向 prompt 的文本格式化在节点内按需完成，不放进 state。
 """
 
-from typing import Literal, NotRequired, Required, TypedDict
+from typing import Any, Literal, NotRequired, Required, TypedDict
 
 from app.entities.column_info import ColumnInfo
 from app.entities.metric_info import MetricInfo
@@ -16,10 +16,13 @@ from app.entities.value_info import ValueInfo
 class MetricInfoState(TypedDict, total=False):
     """SQL 生成可使用的指标上下文。"""
 
+    id: str
     name: str
     description: str
     relevant_columns: list[str]
     alias: list[str]
+    aggregation: str
+    expression: str | None
 
 
 class ColumnInfoState(TypedDict, total=False):
@@ -73,78 +76,6 @@ class SqlMemoryExampleState(TypedDict, total=False):
     similarity: float
 
 
-class MetricBindingState(TypedDict, total=False):
-    """用户指标表达解析出的 canonical 指标。"""
-
-    raw_mention: str
-    canonical_metric: str
-    matched_by: str
-    evidence: str
-    relevant_columns: list[str]
-    confidence: str
-
-
-class ResolvedFilterState(TypedDict, total=False):
-    """用户枚举值表达解析出的 canonical 筛选条件。"""
-
-    raw_value: str
-    canonical_value: str
-    column: str
-    field_alias: str
-    matched_by: str
-    allowed_sql_literals: list[str]
-
-
-class GroupByBindingState(TypedDict, total=False):
-    """用户分组表达解析出的 canonical 维度。"""
-
-    raw_mention: str
-    column: str
-    field_alias: str
-    matched_by: str
-    confidence: str
-
-
-class TimeBindingState(TypedDict, total=False):
-    """用户时间表达解析出的结构化时间约束。"""
-
-    raw_text: str
-    grain: str
-    year: int
-    quarter: str
-    month: int
-    start_date: str
-    end_date: str
-    start_date_id: int
-    end_date_id: int
-    strategy: str
-    required_columns: list[str]
-
-
-class BindingIssueState(TypedDict, total=False):
-    """业务绑定中未解析或存在歧义的对象。"""
-
-    type: str
-    raw_text: str
-    reason: str
-    candidate_column: str
-
-
-class BusinessBindingState(TypedDict, total=False):
-    """业务绑定层产出的唯一 canonical 业务语义对象。
-
-    下游如需指标、筛选、分组、时间、未解析项，都从这个对象中读取，
-    不再在顶层 state 里保存 metric_bindings/resolved_filters 等展开字段。
-    """
-
-    metrics: list[MetricBindingState]
-    filters: list[ResolvedFilterState]
-    groups: list[GroupByBindingState]
-    time: TimeBindingState | None
-    unresolved: list[BindingIssueState]
-    ambiguous: list[BindingIssueState]
-
-
 class RetrievalContextState(TypedDict, total=False):
     """生产链路可消费的召回原始对象。"""
 
@@ -170,6 +101,7 @@ class TraceState(TypedDict, total=False):
     retrieved_metrics: list[str]
     retrieved_values: list[str]
     node_timings: list[dict]
+    planning_issues: list[dict[str, Any]]
     sql_explanation: str
     sql_correction_attempts: int
 
@@ -182,6 +114,15 @@ class OutputState(TypedDict, total=False):
     meta: dict
 
 
+FailureCategory = Literal[
+    "input_guard",
+    "semantic_planning",
+    "sql_validation",
+    "sql_execution",
+    "system",
+]
+
+
 class FailureState(TypedDict, total=False):
     """跨节点共享的最终失败状态。
 
@@ -189,15 +130,7 @@ class FailureState(TypedDict, total=False):
     报告的最终失败才进入 Graph State。
     """
 
-    category: Required[
-        Literal[
-            "input_guard",
-            "business_binding",
-            "sql_validation",
-            "sql_execution",
-            "system",
-        ]
-    ]
+    category: Required[FailureCategory]
     stage: Required[str]
     code: Required[str]
     message: Required[str]
@@ -219,7 +152,7 @@ class DataAgentState(TypedDict, total=False):
 
     # SQL 生成上下文
     sql_context: SqlContextState
-    business_binding: BusinessBindingState
+    semantic_plan: NotRequired[dict[str, Any]]
 
     # SQL 生成结果。SQL 执行结果统一放在 output。
     sql: str

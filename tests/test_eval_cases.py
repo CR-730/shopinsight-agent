@@ -1,7 +1,19 @@
+import asyncio
+import importlib
+from decimal import Decimal
 from pathlib import Path
+from types import SimpleNamespace
 
-from app.evaluation.cases import EvalCase, evaluate_case, load_eval_cases
-from app.scripts.run_eval import _infer_exception_stage
+from app.evaluation.cases import (
+    EvalCase,
+    build_trace,
+    evaluate_case,
+    load_eval_cases,
+    results_match,
+)
+from app.scripts.run_eval import ALL_CAPABILITIES, _infer_exception_stage
+
+run_eval_module = importlib.import_module("app.scripts.run_eval")
 
 
 def test_infer_exception_stage_uses_traceback_node_name():
@@ -64,10 +76,18 @@ def test_evaluate_case_passes_when_sql_and_context_match():
             ],
             "metrics": [{"name": "GMV"}],
         },
-        "business_binding": {
-            "metrics": [{"canonical_metric": "GMV", "raw_mention": "销售额"}],
-            "filters": [{"canonical_value": "华北", "raw_value": "北方区域"}],
-            "time": {"grain": "quarter", "year": 2025},
+        "semantic_plan": {
+            "measures": [{"metric_id": "GMV", "output_alias": "GMV"}],
+            "dimensions": [],
+            "predicates": [
+                {
+                    "kind": "temporal",
+                    "grain": "quarter",
+                    "start_date": "2025-01-01",
+                    "end_date": "2025-03-31",
+                }
+            ],
+            "order_by": [],
         },
         "output": {"rows": [{"销售总额": 1}]},
     }
@@ -78,13 +98,9 @@ def test_evaluate_case_passes_when_sql_and_context_match():
     assert result.failure_stage is None
     assert result.failures == []
     assert result.trace["generated_sql"].startswith("select")
-    assert result.trace["metric_bindings"] == [
-        {"canonical_metric": "GMV", "raw_mention": "销售额"}
-    ]
-    assert result.trace["resolved_filters"] == [
-        {"canonical_value": "华北", "raw_value": "北方区域"}
-    ]
-    assert result.trace["time_binding"] == {"grain": "quarter", "year": 2025}
+    assert result.trace["semantic_plan"] == state["semantic_plan"]
+    assert result.trace["time_binding"]["grain"] == "quarter"
+    assert result.trace["time_binding"]["year"] == 2025
     assert "mysql.dw.execute" in result.trace["tool_calls"]
 
 
@@ -92,7 +108,7 @@ def test_evaluate_case_checks_expected_unresolved_binding():
     case = EvalCase(
         id="unknown_region",
         query="火星区域的销售额是多少",
-        expected_blocked_by="business_binding",
+        expected_blocked_by="semantic_planning",
         expected_unresolved_binding={
             "type": "enum_value",
             "raw_text": "火星",
@@ -100,24 +116,24 @@ def test_evaluate_case_checks_expected_unresolved_binding():
         },
     )
     state = {
-        "trace": {"keywords": ["火星", "区域", "销售额"]},
-        "sql": "",
-        "failure": {
-            "category": "business_binding",
-            "stage": "business_binding",
-            "code": "value_not_found",
-            "message": "业务绑定未解析",
-            "disposition": "blocked",
-        },
-        "business_binding": {
-            "unresolved": [
+        "trace": {
+            "keywords": ["火星", "区域", "销售额"],
+            "planning_issues": [
                 {
                     "type": "enum_value",
                     "raw_text": "火星",
                     "candidate_column": "dim_region.region_name",
                     "reason": "value_not_found",
                 }
-            ]
+            ],
+        },
+        "sql": "",
+        "failure": {
+            "category": "semantic_planning",
+            "stage": "semantic_planning",
+            "code": "value_not_found",
+            "message": "业务绑定未解析",
+            "disposition": "blocked",
         },
     }
 
@@ -256,9 +272,7 @@ def test_evaluate_case_keeps_tool_execution_timeout_stage_for_sql_state():
         },
         "sql": "select sum(order_amount) from fact_order",
         "sql_context": {
-            "tables": [
-                {"name": "fact_order", "columns": [{"name": "order_amount"}]}
-            ],
+            "tables": [{"name": "fact_order", "columns": [{"name": "order_amount"}]}],
             "metrics": [{"name": "GMV"}],
         },
     }
@@ -316,3 +330,226 @@ def test_eval_cases_cover_required_suites_and_count():
     assert sum(1 for case in cases if case.suite == "adversarial") >= 3
     assert any("rag_value_hybrid_recall" in case.capabilities for case in cases)
     assert any("sql_correction_loop" in case.capabilities for case in cases)
+
+
+def test_eval_trace_reads_the_semantic_plan():
+    plan = {"version": "1", "measures": [{"metric_id": "GMV"}]}
+    trace = build_trace(
+        {
+            "semantic_plan": plan,
+            "trace": {"planning_issues": []},
+        }
+    )
+
+    assert trace["semantic_plan"] == plan
+    assert "metric_bindings" not in trace
+
+
+def test_eval_checks_expected_semantic_plan_subset():
+    case = EvalCase(
+        id="plan",
+        query="统计销售额",
+        expected_semantic_plan={
+            "measures": [{"metric_id": "GMV", "output_alias": "GMV"}],
+            "required_table_ids": ["fact_order"],
+        },
+    )
+    state = {
+        "trace": {"keywords": ["销售额"]},
+        "semantic_plan": {
+            "version": "1",
+            "measures": [{"metric_id": "GMV", "output_alias": "错误别名"}],
+            "required_table_ids": ["fact_order"],
+        },
+    }
+
+    result = evaluate_case(case, state)
+
+    assert result.passed is False
+    assert "semantic_plan_mismatch" in {item.code for item in result.failures}
+
+
+def test_eval_treats_join_endpoints_as_commutative():
+    case = EvalCase(
+        id="join",
+        query="按地区统计销售额",
+        expected_semantic_plan={
+            "joins": [
+                {
+                    "left_column_id": "fact_order.region_id",
+                    "right_column_id": "dim_region.region_id",
+                    "join_type": "inner",
+                }
+            ]
+        },
+    )
+    state = {
+        "trace": {"keywords": ["地区", "销售额"]},
+        "semantic_plan": {
+            "joins": [
+                {
+                    "left_column_id": "dim_region.region_id",
+                    "right_column_id": "fact_order.region_id",
+                    "join_type": "inner",
+                }
+            ]
+        },
+    }
+
+    assert evaluate_case(case, state).passed is True
+
+
+def test_eval_checks_expected_planning_issue():
+    case = EvalCase(
+        id="ambiguous",
+        query="华南销售额",
+        expected_blocked_by="semantic_planning",
+        expected_planning_issue={"code": "ambiguous_enum_value"},
+    )
+    state = {
+        "trace": {
+            "keywords": ["华南"],
+            "planning_issues": [{"code": "value_not_found"}],
+        },
+        "failure": {
+            "category": "semantic_planning",
+            "stage": "semantic_planning",
+            "code": "value_not_found",
+            "message": "需要澄清",
+            "disposition": "blocked",
+        },
+    }
+
+    result = evaluate_case(case, state)
+
+    assert result.failure_stage == "semantic_planning"
+    assert "missing_expected_planning_issue" in {item.code for item in result.failures}
+
+
+def test_eval_reports_semantic_planning_block_stage():
+    case = EvalCase(
+        id="blocked",
+        query="华南销售额",
+        expected_blocked_by="semantic_planning",
+    )
+    state = {
+        "trace": {"keywords": ["华南"], "planning_issues": []},
+        "failure": {
+            "category": "semantic_planning",
+            "stage": "semantic_planning",
+            "code": "ambiguous",
+            "message": "需要澄清",
+            "disposition": "blocked",
+        },
+    }
+
+    assert evaluate_case(case, state).passed is True
+
+
+def test_eval_checks_sql_plan_consistency_status():
+    case = EvalCase(
+        id="consistency",
+        query="统计销售额",
+        expected_sql_plan_consistent=True,
+    )
+    state = {
+        "trace": {
+            "keywords": ["销售额"],
+            "sql_plan_consistency": {"status": "failed", "differences": []},
+        }
+    }
+
+    result = evaluate_case(case, state)
+
+    assert "sql_plan_consistency_mismatch" in {item.code for item in result.failures}
+
+
+def test_exact_result_normalizes_decimal_float_and_row_order():
+    expected = [{"GMV": Decimal("2.00")}, {"GMV": 1}]
+    actual = [{"GMV": 1.0}, {"GMV": Decimal("2")}]
+
+    assert results_match(actual, expected, order_sensitive=False) is True
+    assert results_match(actual, expected, order_sensitive=True) is False
+
+
+def test_nonempty_wrong_result_fails_exact_comparison():
+    case = EvalCase(
+        id="exact",
+        query="统计销售额",
+        expected_result=[{"GMV": 100}],
+    )
+    state = {
+        "trace": {"keywords": ["销售额"]},
+        "output": {"rows": [{"GMV": 99}]},
+    }
+
+    result = evaluate_case(case, state)
+
+    assert "exact_result_mismatch" in {item.code for item in result.failures}
+
+
+def test_eval_loads_legacy_unresolved_expectation_temporarily(tmp_path):
+    path = tmp_path / "legacy.yaml"
+    path.write_text(
+        """
+- id: legacy
+  query: 火星销售额
+  expected_unresolved_binding: {type: enum_value, reason: value_not_found}
+""",
+        encoding="utf-8",
+    )
+
+    case = load_eval_cases(path)[0]
+
+    assert case.expected_planning_issue == {
+        "type": "enum_value",
+        "reason": "value_not_found",
+    }
+
+
+def test_tool_calls_use_semantic_planning_name():
+    trace = build_trace(
+        {
+            "trace": {"keywords": [], "planning_issues": []},
+            "semantic_plan": {"version": "1"},
+        }
+    )
+
+    assert "semantic_planning" in trace["tool_calls"]
+    assert "plan_consistency" in ALL_CAPABILITIES
+
+
+def test_run_eval_case_sets_fixed_semantic_reference_date(monkeypatch):
+    captured = {}
+
+    class MetaRepository:
+        async def get_active_build_version(self):
+            return "build-v1"
+
+        async def get_metadata_cache_version(self):
+            return "meta-v1"
+
+    async def invoke(*, input, context):
+        captured["context"] = context
+        return {"trace": {"keywords": ["GMV"]}}
+
+    monkeypatch.setattr(run_eval_module, "graph", SimpleNamespace(ainvoke=invoke))
+    repositories = {
+        "column_qdrant_repository": object(),
+        "metric_qdrant_repository": object(),
+        "value_es_repository": object(),
+        "value_qdrant_repository": object(),
+        "meta_mysql_repository": MetaRepository(),
+        "dw_mysql_repository": object(),
+    }
+
+    asyncio.run(
+        run_eval_module._run_case(
+            EvalCase(id="reference-date", query="统计GMV"),
+            repositories,
+        )
+    )
+
+    assert captured["context"]["semantic_reference_date"].isoformat() == (
+        run_eval_module.date.today().isoformat()
+    )

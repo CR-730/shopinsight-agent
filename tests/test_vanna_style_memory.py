@@ -13,10 +13,51 @@ from app.agent.memory import (
     format_conversation_history,
     format_tool_memory_results,
 )
+from app.agent.semantic_planning.memory import semantic_plan_from_memory_args
 from app.repositories.qdrant.agent_memory_qdrant_repository import (
     AgentMemoryQdrantRepository,
 )
 from app.services.query_service import QueryService, _assistant_message
+
+
+def _semantic_plan():
+    return {
+        "version": "1",
+        "metadata_version": "meta-v2",
+        "measures": [
+            {
+                "metric_id": "GMV",
+                "name": "GMV",
+                "aggregation": "sum",
+                "expression": None,
+                "source_column_ids": ["fact_order.order_amount"],
+                "output_alias": "GMV",
+            }
+        ],
+        "dimensions": [],
+        "predicates": [],
+        "order_by": [],
+        "limit": None,
+        "joins": [],
+        "required_table_ids": ["fact_order"],
+        "required_column_ids": ["fact_order.order_amount"],
+        "provenance": [
+            {
+                "raw_text": "销售额",
+                "resolved_id": "GMV",
+                "method": "metric_alias",
+                "evidence": "包含用户原始表达，不应进入长期记忆",
+            }
+        ],
+    }
+
+
+def _successful_memory_state():
+    return {
+        "sql": "select sum(order_amount) as GMV from fact_order",
+        "output": {"rows": [{"GMV": 100}]},
+        "semantic_plan": _semantic_plan(),
+    }
 
 
 class FakeEmbeddingClient:
@@ -53,7 +94,9 @@ class FakeQdrantClient:
                 continue
             score = sum(left * right for left, right in zip(query, point.vector))
             if score >= score_threshold:
-                hits.append(SimpleNamespace(id=point.id, payload=point.payload, score=score))
+                hits.append(
+                    SimpleNamespace(id=point.id, payload=point.payload, score=score)
+                )
         hits.sort(key=lambda item: item.score, reverse=True)
         return SimpleNamespace(points=hits[:limit])
 
@@ -240,11 +283,7 @@ def test_memory_context_formatting_is_compact():
         ToolMemorySearchResult(
             memory=build_sql_tool_memory(
                 "统计华北 GMV",
-                {
-                    "sql": "select sum(order_amount) as GMV from fact_order",
-                    "output": {"rows": [{"GMV": 100}]},
-                    "business_binding": {"metrics": [{"canonical_metric": "GMV"}]},
-                },
+                _successful_memory_state(),
             ),
             similarity_score=0.9,
             rank=1,
@@ -259,89 +298,132 @@ def test_memory_context_formatting_is_compact():
 
 
 def test_build_sql_tool_memory_requires_successful_sql_result():
+    assert build_sql_tool_memory("统计 GMV", _successful_memory_state()) is not None
+
+    empty = _successful_memory_state()
+    empty["output"] = {"rows": []}
+    assert build_sql_tool_memory("统计 GMV", empty) is None
+
+    blocked = _successful_memory_state()
+    blocked["failure"] = {
+        "category": "input_guard",
+        "stage": "pre_rag_guard",
+        "code": "blocked",
+        "message": "blocked",
+        "disposition": "blocked",
+    }
+    assert build_sql_tool_memory("统计 GMV", blocked) is None
+
     assert (
         build_sql_tool_memory(
-            "统计 GMV",
-            {
-                "sql": "select 1",
-                "output": {"rows": [{"GMV": 1}]},
-                    "business_binding": {"metrics": [{"canonical_metric": "GMV"}]},
-            },
-        )
-        is not None
-    )
-    assert (
-        build_sql_tool_memory(
-            "统计 GMV",
-            {
-                "sql": "select 1",
-                "output": {"rows": []},
-                    "business_binding": {"metrics": [{"canonical_metric": "GMV"}]},
-            },
-        )
-        is None
-    )
-    assert (
-        build_sql_tool_memory(
-            "统计 GMV",
-            {
-                "sql": "select 1",
-                "output": {"rows": [{"GMV": 1}]},
-                    "failure": {
-                        "category": "input_guard",
-                        "stage": "pre_rag_guard",
-                        "code": "blocked",
-                        "message": "blocked",
-                        "disposition": "blocked",
-                    },
-                    "business_binding": {"metrics": [{"canonical_metric": "GMV"}]},
-            },
-        )
-        is None
-    )
-    assert (
-        build_sql_tool_memory(
-            "统计 GMV",
-            {
-                "sql": "select 1",
-                "output": {"rows": [{"GMV": 1}]},
-                    "failure": {
-                        "category": "sql_validation",
-                        "stage": "sql_executor",
-                        "code": "blocked",
-                        "message": "blocked",
-                        "disposition": "blocked",
-                    },
-                    "business_binding": {"metrics": [{"canonical_metric": "GMV"}]},
-            },
+            "统计 GMV", {"sql": "select 1", "output": {"rows": [{"GMV": 1}]}}
         )
         is None
     )
 
+
+def test_success_memory_stores_plan_sql_and_metadata_version():
+    memory = build_sql_tool_memory("统计 GMV", _successful_memory_state())
+
+    assert memory is not None
+    assert memory.args == {
+        "sql": "select sum(order_amount) as GMV from fact_order",
+        "semantic_plan": {**_semantic_plan(), "provenance": []},
+        "metadata_version": "meta-v2",
+    }
+
+
+def test_memory_never_stores_semantic_draft_or_runtime_trace():
+    state = _successful_memory_state()
+    state["semantic_draft"] = {"candidate_catalog": {"secret": "candidate"}}
+    state["trace"] = {"full_prompt": "secret prompt"}
+
+    memory = build_sql_tool_memory("统计 GMV", state)
+
+    assert memory is not None
+    assert "semantic_draft" not in memory.args
+    assert "trace" not in memory.args
+    assert "candidate_catalog" not in str(memory.args)
+
+
+def test_failed_empty_or_incomplete_plan_is_not_saved():
+    failed = _successful_memory_state()
+    failed["failure"] = {
+        "category": "semantic_planning",
+        "stage": "semantic_planning",
+        "code": "ambiguous",
+        "message": "ambiguous",
+        "disposition": "blocked",
+    }
+    empty = _successful_memory_state()
+    empty["output"] = {"rows": []}
+    incomplete = _successful_memory_state()
+    incomplete["semantic_plan"] = {"version": "1"}
+
+    assert build_sql_tool_memory("统计 GMV", failed) is None
+    assert build_sql_tool_memory("统计 GMV", empty) is None
+    assert build_sql_tool_memory("统计 GMV", incomplete) is None
+
+
+def test_memory_plan_loader_rejects_missing_or_incomplete_plan():
+    memory = build_sql_tool_memory("统计 GMV", _successful_memory_state())
+
+    assert memory is not None
+    assert semantic_plan_from_memory_args(memory.args) == memory.args["semantic_plan"]
     assert (
-        build_sql_tool_memory(
-            "统计 GMV",
-            {"sql": "select 1", "output": {"rows": [{"GMV": 1}]}},
+        semantic_plan_from_memory_args(
+            {"sql": "select sum(order_amount) from fact_order"}
         )
         is None
     )
+    assert semantic_plan_from_memory_args({"semantic_plan": {"version": "1"}}) is None
 
 
 def test_sql_tool_memory_does_not_store_result_preview():
+    state = _successful_memory_state()
+    state["output"] = {"rows": [{"GMV": 100, "customer_phone": "13800000000"}]}
     memory = build_sql_tool_memory(
         "统计华北 GMV",
-        {
-            "sql": "select sum(order_amount) as GMV from fact_order",
-            "output": {"rows": [{"GMV": 100, "customer_phone": "13800000000"}]},
-            "business_binding": {"metrics": [{"canonical_metric": "GMV"}]},
-        },
+        state,
     )
 
     assert memory is not None
     assert memory.args == {
         "sql": "select sum(order_amount) as GMV from fact_order",
-        "business_binding": {"metrics": [{"canonical_metric": "GMV"}]},
+        "semantic_plan": {**_semantic_plan(), "provenance": []},
+        "metadata_version": "meta-v2",
     }
+
+
+def test_sql_tool_memory_keeps_trusted_plan_projections():
+    plan = _semantic_plan()
+    plan["measures"] = []
+    plan["dimensions"] = [
+        {
+            "column_id": "fact_order.order_id",
+            "role": "projection",
+            "output_alias": "订单编号",
+        }
+    ]
+    plan["required_column_ids"] = ["fact_order.order_id"]
+    plan["provenance"] = []
+    memory = build_sql_tool_memory(
+        "列出订单编号",
+        {
+            "sql": "select order_id from fact_order",
+            "output": {"rows": [{"order_id": 1}]},
+            "semantic_plan": plan,
+        },
+    )
+
+    assert memory is not None
+    assert memory.args["semantic_plan"]["dimensions"] == [
+        {
+            "column_id": "fact_order.order_id",
+            "role": "projection",
+            "output_alias": "订单编号",
+        }
+    ]
 
 
 def test_followup_memory_question_includes_conversation_context():
@@ -375,17 +457,16 @@ def test_assistant_message_uses_generic_error_without_llm_message():
     content = _assistant_message(
         {
             "failure": {
-                "category": "business_binding",
-                "stage": "business_binding",
+                "category": "semantic_planning",
+                "stage": "semantic_planning",
                 "code": "metric_not_bound",
-                "message": "business_binding unresolved: metric=订单, reason=metric_not_bound",
+                "message": "semantic planning unresolved: metric_not_bound",
                 "disposition": "blocked",
             },
         }
     )
 
     assert content == "出了点问题，请稍后重试。"
-    assert "business_binding" not in content
     assert "metric_not_bound" not in content
 
 
@@ -393,47 +474,19 @@ def test_assistant_message_prefers_llm_user_facing_message():
     content = _assistant_message(
         {
             "failure": {
-                "category": "business_binding",
-                "stage": "business_binding",
+                "category": "semantic_planning",
+                "stage": "semantic_planning",
                 "code": "metric_not_bound",
-                "message": "business_binding unresolved: metric=订单, reason=metric_not_bound",
+                "message": "semantic planning unresolved: metric_not_bound",
                 "user_message": "订单数这个指标还没配置；销售额可以先查。你可以直接回复先查销售额。",
                 "disposition": "blocked",
             },
         }
     )
 
-    assert content == "订单数这个指标还没配置；销售额可以先查。你可以直接回复先查销售额。"
-
-
-def test_assistant_message_does_not_generate_rule_copy_from_bound_metrics():
-    content = _assistant_message(
-        {
-            "failure": {
-                "category": "business_binding",
-                "stage": "business_binding",
-                "code": "metric_not_bound",
-                "message": "business_binding unresolved: metric=订单, reason=metric_not_bound",
-                "disposition": "blocked",
-            },
-            "business_binding": {
-                "metrics": [
-                    {
-                        "raw_mention": "销售额",
-                        "canonical_metric": "GMV",
-                        "matched_by": "metric_alias",
-                        "evidence": "GMV.alias contains 销售额",
-                        "relevant_columns": ["fact_order.order_amount"],
-                        "confidence": "high",
-                    }
-                ]
-            },
-        }
+    assert (
+        content == "订单数这个指标还没配置；销售额可以先查。你可以直接回复先查销售额。"
     )
-
-    assert content == "出了点问题，请稍后重试。"
-    assert "business_binding" not in content
-    assert "metric_not_bound" not in content
 
 
 def test_anonymous_user_does_not_write_long_term_sql_memory():
@@ -461,7 +514,7 @@ def test_anonymous_user_does_not_write_long_term_sql_memory():
             final_state={
                 "sql": "select 1 as GMV",
                 "output": {"rows": [{"GMV": 1}]},
-                "business_binding": {"metrics": [{"canonical_metric": "GMV"}]},
+                "semantic_plan": _semantic_plan(),
             },
         )
 

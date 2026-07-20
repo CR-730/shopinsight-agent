@@ -6,10 +6,13 @@ import json
 import subprocess
 import time
 import traceback
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from decimal import Decimal
 from pathlib import Path
 from typing import Any
+
+from sqlglot import expressions as exp
+from sqlglot import parse
 
 from app.agent.context import DataAgentContext
 from app.agent.cost import CostRates, CostTracker
@@ -30,7 +33,12 @@ from app.clients.mysql_client_manager import (
 )
 from app.clients.qdrant_client_manager import qdrant_client_manager
 from app.conf.app_config import app_config
-from app.evaluation.cases import EvalCase, evaluate_case, load_eval_cases
+from app.evaluation.cases import (
+    EvalCase,
+    evaluate_case,
+    load_eval_cases,
+    results_match,
+)
 from app.repositories.es.value_es_repository import ValueESRepository
 from app.repositories.mysql.dw.dw_mysql_repository import DWMySQLRepository
 from app.repositories.mysql.meta.meta_mysql_repository import MetaMySQLRepository
@@ -46,6 +54,7 @@ ALL_CAPABILITIES = {
     "context_filter",
     "sql_generation",
     "sql_validation",
+    "plan_consistency",
     "sql_correction_loop",
     "tool_execution",
     "safety",
@@ -54,7 +63,14 @@ ALL_CAPABILITIES = {
 ALL_SCENARIOS = {"smoke", "regression", "adversarial", "realistic"}
 
 
-async def run_eval(cases_path: Path, output_path: Path | None = None) -> int:
+async def run_eval(
+    cases_path: Path,
+    output_path: Path | None = None,
+    *,
+    repeat: int = 1,
+) -> int:
+    if repeat < 1:
+        raise ValueError("repeat must be a positive integer")
     started_at = _now_iso()
     started = time.perf_counter()
     run_id = started_at.replace(":", "-")
@@ -88,8 +104,25 @@ async def run_eval(cases_path: Path, output_path: Path | None = None) -> int:
             }
 
             for case in cases:
-                case_payload = await _run_case(case, repositories)
-                results.append(case_payload)
+                for repeat_index in range(repeat):
+                    case_payload = await _run_case(
+                        case,
+                        repositories,
+                        repeat_index=repeat_index,
+                    )
+                    if (
+                        case.oracle_sql
+                        and not case.expected_blocked_by
+                        and (case_payload.get("trace") or {}).get("final_answer")
+                        is not None
+                    ):
+                        oracle_rows = await _run_oracle(
+                            case,
+                            repositories["dw_mysql_repository"],
+                        )
+                        _score_oracle_result(case_payload, case, oracle_rows)
+                    case_payload["repeat_index"] = repeat_index
+                    results.append(case_payload)
 
         finished_at = _now_iso()
         total_latency_seconds = round(time.perf_counter() - started, 3)
@@ -108,6 +141,8 @@ async def run_eval(cases_path: Path, output_path: Path | None = None) -> int:
             "git_commit": _git_commit(),
             "model": app_config.llm.model,
             "summary": summary,
+            "repeat": repeat,
+            "repeat_summary": summarize_repeat_results(results),
             "usage": _summarize_usage([item["usage"] for item in results]),
             "cost": _summarize_cost([item["usage"] for item in results]),
             "total_latency_seconds": total_latency_seconds,
@@ -121,7 +156,9 @@ async def run_eval(cases_path: Path, output_path: Path | None = None) -> int:
         if output_path is not None:
             output_path.parent.mkdir(parents=True, exist_ok=True)
             output_path.write_text(
-                json.dumps(payload, ensure_ascii=False, indent=2, default=_json_default),
+                json.dumps(
+                    payload, ensure_ascii=False, indent=2, default=_json_default
+                ),
                 encoding="utf-8",
             )
 
@@ -134,7 +171,12 @@ async def run_eval(cases_path: Path, output_path: Path | None = None) -> int:
         await dw_mysql_client_manager.close()
 
 
-async def _run_case(case: EvalCase, repositories: dict[str, Any]) -> dict[str, Any]:
+async def _run_case(
+    case: EvalCase,
+    repositories: dict[str, Any],
+    *,
+    repeat_index: int = 0,
+) -> dict[str, Any]:
     print(f"Running eval case: {case.id} - {case.query}")
     cost_tracker = _new_cost_tracker()
     metadata_build_version = await repositories[
@@ -154,13 +196,17 @@ async def _run_case(case: EvalCase, repositories: dict[str, Any]) -> dict[str, A
         cost_tracker=cost_tracker,
         metadata_build_version=metadata_build_version,
         metadata_cache_version=metadata_cache_version,
+        semantic_reference_date=date.today(),
+        ablation_options=case.ablation_options or {},
     )
     state = DataAgentState(query=case.query)
     started = time.perf_counter()
     cache_namespace_token = set_llm_cache_context_namespace(
-        f"metadata:{metadata_cache_version}"
+        f"eval:{case.id}:repeat:{repeat_index}:metadata:{metadata_cache_version}"
     )
-    call_budget_token = set_llm_request_call_budget(app_config.llm.max_calls_per_request)
+    call_budget_token = set_llm_request_call_budget(
+        app_config.llm.max_calls_per_request
+    )
     try:
         final_state = await asyncio.wait_for(
             graph.ainvoke(input=state, context=context),
@@ -211,6 +257,73 @@ async def _run_case(case: EvalCase, repositories: dict[str, Any]) -> dict[str, A
     return payload
 
 
+async def _run_oracle(case: EvalCase, dw_repository) -> list[dict[str, Any]]:
+    sql = _validated_oracle_sql(case.oracle_sql or "")
+    return await dw_repository.run(sql)
+
+
+def _validated_oracle_sql(sql: str) -> str:
+    statements = parse(sql, read="mysql")
+    if len(statements) != 1 or not isinstance(statements[0], exp.Select):
+        raise ValueError("oracle_sql must be one read-only SELECT statement")
+    return statements[0].sql(dialect="mysql")
+
+
+def _score_oracle_result(
+    payload: dict[str, Any],
+    case: EvalCase,
+    oracle_rows: list[dict[str, Any]],
+) -> None:
+    agent_rows = (payload.get("trace") or {}).get("final_answer")
+    plan_has_order = bool(
+        ((payload.get("trace") or {}).get("semantic_plan") or {}).get("order_by")
+    )
+    matched = results_match(
+        agent_rows,
+        oracle_rows,
+        order_sensitive=case.order_sensitive or plan_has_order,
+    )
+    payload["oracle_result_match"] = matched
+    payload["oracle_rows"] = oracle_rows
+    if matched:
+        return
+    payload["passed"] = False
+    payload["failure_stage"] = payload.get("failure_stage") or "answer_generation"
+    payload.setdefault("failures", []).append(
+        {
+            "code": "oracle_result_mismatch",
+            "message": "Agent SQL 结果与人工审核 Oracle SQL 结果不一致",
+            "stage": "answer_generation",
+            "fatal": True,
+        }
+    )
+
+
+def summarize_repeat_results(results: list[dict[str, Any]]) -> dict[str, Any]:
+    """Fail a case if any repeated run violates plan or Oracle consistency."""
+
+    by_case: dict[str, list[dict[str, Any]]] = {}
+    for item in results:
+        by_case.setdefault(str(item.get("case_id") or ""), []).append(item)
+    return {
+        case_id: {
+            "passed": all(
+                item.get("passed") is True
+                and (item.get("oracle_result_match") is not False)
+                and (
+                    ((item.get("trace") or {}).get("sql_plan_consistency") or {}).get(
+                        "status"
+                    )
+                    != "failed"
+                )
+                for item in items
+            ),
+            "runs": len(items),
+        }
+        for case_id, items in by_case.items()
+    }
+
+
 def _new_cost_tracker() -> CostTracker:
     return CostTracker(
         CostRates(
@@ -225,7 +338,9 @@ def _new_cost_tracker() -> CostTracker:
 def _json_default(value: Any) -> Any:
     if isinstance(value, Decimal):
         return float(value)
-    raise TypeError(f"Object of type {value.__class__.__name__} is not JSON serializable")
+    raise TypeError(
+        f"Object of type {value.__class__.__name__} is not JSON serializable"
+    )
 
 
 def _infer_exception_stage(exc: Exception) -> str:
@@ -240,8 +355,7 @@ def _infer_exception_stage(exc: Exception) -> str:
         return "rag_recall"
     if (
         "context_compaction" in text
-        or "filter_table_context" in text
-        or "filter_metric_context" in text
+        or "compile_context_from_plan" in text
         or "add_runtime_context" in text
     ):
         return "context_filter"
@@ -362,12 +476,19 @@ if __name__ == "__main__":
         default=None,
         help="评测报告 JSON 输出路径，例如 eval/runs/latest.json",
     )
+    parser.add_argument(
+        "--repeat",
+        type=int,
+        default=1,
+        help="每条用例独立重复执行次数",
+    )
     args = parser.parse_args()
     raise SystemExit(
         asyncio.run(
             run_eval(
                 cases_path=Path(args.cases),
                 output_path=Path(args.output) if args.output else None,
+                repeat=args.repeat,
             )
         )
     )

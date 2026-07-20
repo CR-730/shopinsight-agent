@@ -8,6 +8,7 @@ Context 用来保存一次图执行过程中不参与状态合并的外部依赖
 这样节点可以通过 runtime.context 复用外部工具，而不需要把连接类对象塞进 State
 """
 
+from datetime import date
 from typing import NotRequired, TypedDict
 
 from langchain_core.embeddings import Embeddings
@@ -45,6 +46,8 @@ class DataAgentContext(TypedDict):
     cost_tracker: CostTracker
     metadata_build_version: NotRequired[str | None]
     metadata_cache_version: NotRequired[str]
+    # 本轮请求固定的语义时间基准，禁止节点各自调用 date.today()。
+    semantic_reference_date: NotRequired[date]
     user_id: NotRequired[str]
     # 仅供离线消融评测使用；线上请求不传该字段，默认保持正常链路。
     ablation_options: NotRequired[dict]

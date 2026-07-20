@@ -28,3 +28,18 @@ def test_eval_cases_have_required_diagnostic_fields():
         assert isinstance(case.must_call_tools, list)
         assert isinstance(case.forbidden_behavior, list)
         assert isinstance(case.fatal_errors, list)
+
+
+def test_eval_cases_use_semantic_planning_contract_for_core_queries():
+    cases = load_eval_cases(Path("examples/eval_cases.yaml"))
+    by_id = {case.id: case for case in cases}
+
+    for case_id in (
+        "sql_topn_product_sales",
+        "sql_time_range_quarter_region",
+        "sql_multi_metric_category",
+    ):
+        assert by_id[case_id].expected_semantic_plan
+        assert by_id[case_id].expected_sql_plan_consistent is True
+
+    assert all(case.expected_unresolved_binding is None for case in cases)

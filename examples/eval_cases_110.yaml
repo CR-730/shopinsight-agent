@@ -568,6 +568,25 @@
   - dim_product.product_name
   expected_metrics:
   - GMV
+  expected_semantic_plan:
+    measures:
+    - metric_id: GMV
+      output_alias: GMV
+    dimensions:
+    - column_id: dim_product.product_name
+      role: group_by
+      output_alias: 商品
+    order_by:
+    - target_type: measure
+      target_id: GMV
+      direction: desc
+    limit: 5
+    joins:
+    - left_column_id: fact_order.product_id
+      right_column_id: dim_product.product_id
+      join_type: inner
+    required_table_ids: [fact_order, dim_product]
+  expected_sql_plan_consistent: true
   expected_result:
     mode: non_empty
   forbidden_sql:
@@ -614,6 +633,26 @@
   - dim_region.region_name
   expected_metrics:
   - GMV
+  expected_semantic_plan:
+    measures:
+    - metric_id: GMV
+      output_alias: GMV
+    dimensions:
+    - column_id: dim_region.region_name
+      role: group_by
+      output_alias: 大区
+    predicates:
+    - kind: temporal
+      column_id: fact_order.date_id
+      start_date_id: 20250101
+      end_date_id: 20250331
+      grain: quarter
+    joins:
+    - left_column_id: fact_order.region_id
+      right_column_id: dim_region.region_id
+      join_type: inner
+    required_table_ids: [fact_order, dim_region]
+  expected_sql_plan_consistent: true
   expected_time_binding:
     grain: quarter
     year: 2025
@@ -867,12 +906,12 @@
   expected_sql_contains: []
   expected_columns: []
   expected_metrics: []
-  expected_unresolved_binding:
+  expected_planning_issue:
     type: metric
     raw_text: 品牌心智指数
     reason: metric_not_bound
   expected_result: null
-  expected_blocked_by: business_binding
+  expected_blocked_by: semantic_planning
   forbidden_sql:
   - select
   - from
@@ -910,12 +949,12 @@
   expected_columns: []
   expected_metrics:
   - GMV
-  expected_unresolved_binding:
+  expected_planning_issue:
     type: metric
     raw_text: 品牌心智指数
     reason: metric_not_bound
   expected_result: null
-  expected_blocked_by: business_binding
+  expected_blocked_by: semantic_planning
   forbidden_sql:
   - select
   - from
@@ -951,12 +990,12 @@
   expected_sql_contains: []
   expected_columns: []
   expected_metrics: []
-  expected_unresolved_binding:
+  expected_planning_issue:
     type: enum_value
     raw_text: 火星
     candidate_column: dim_region.region_name
   expected_result: null
-  expected_blocked_by: business_binding
+  expected_blocked_by: semantic_planning
   forbidden_sql:
   - select
   - from
@@ -4459,7 +4498,7 @@
   expected_columns: []
   expected_metrics: []
   expected_result: null
-  expected_blocked_by: business_binding
+  expected_blocked_by: semantic_planning
   forbidden_sql:
   - select
   - from
@@ -4479,7 +4518,7 @@
   fatal_errors:
   - forbidden_sql_fragment
   timeout_seconds: 120
-  expected_unresolved_binding:
+  expected_planning_issue:
     type: metric
     raw_text: 品牌忠诚度
     reason: metric_not_bound
@@ -4502,7 +4541,7 @@
   expected_columns: []
   expected_metrics: []
   expected_result: null
-  expected_blocked_by: business_binding
+  expected_blocked_by: semantic_planning
   forbidden_sql:
   - select
   - from
@@ -4522,7 +4561,7 @@
   fatal_errors:
   - forbidden_sql_fragment
   timeout_seconds: 120
-  expected_unresolved_binding:
+  expected_planning_issue:
     type: metric
     raw_text: 品牌心智指数
     reason: metric_not_bound
@@ -4545,7 +4584,7 @@
   expected_columns: []
   expected_metrics: []
   expected_result: null
-  expected_blocked_by: business_binding
+  expected_blocked_by: semantic_planning
   forbidden_sql:
   - select
   - from
@@ -4565,7 +4604,7 @@
   fatal_errors:
   - forbidden_sql_fragment
   timeout_seconds: 120
-  expected_unresolved_binding:
+  expected_planning_issue:
     type: metric
     raw_text: 复购评分
     reason: metric_not_bound
@@ -4588,7 +4627,7 @@
   expected_columns: []
   expected_metrics: []
   expected_result: null
-  expected_blocked_by: business_binding
+  expected_blocked_by: semantic_planning
   forbidden_sql:
   - select
   - from
@@ -4608,7 +4647,7 @@
   fatal_errors:
   - forbidden_sql_fragment
   timeout_seconds: 120
-  expected_unresolved_binding:
+  expected_planning_issue:
     type: metric
     raw_text: 用户价值指数
     reason: metric_not_bound
@@ -4631,7 +4670,7 @@
   expected_columns: []
   expected_metrics: []
   expected_result: null
-  expected_blocked_by: business_binding
+  expected_blocked_by: semantic_planning
   forbidden_sql:
   - select
   - from
@@ -4651,7 +4690,7 @@
   fatal_errors:
   - forbidden_sql_fragment
   timeout_seconds: 120
-  expected_unresolved_binding:
+  expected_planning_issue:
     type: metric
     raw_text: 转化率
     reason: metric_not_bound
@@ -4674,7 +4713,7 @@
   expected_columns: []
   expected_metrics: []
   expected_result: null
-  expected_blocked_by: business_binding
+  expected_blocked_by: semantic_planning
   forbidden_sql:
   - select
   - from
@@ -4694,7 +4733,7 @@
   fatal_errors:
   - forbidden_sql_fragment
   timeout_seconds: 120
-  expected_unresolved_binding:
+  expected_planning_issue:
     type: metric
     raw_text: 满意度得分
     reason: metric_not_bound
@@ -4717,7 +4756,7 @@
   expected_columns: []
   expected_metrics: []
   expected_result: null
-  expected_blocked_by: business_binding
+  expected_blocked_by: semantic_planning
   forbidden_sql:
   - select
   - from
@@ -4737,7 +4776,7 @@
   fatal_errors:
   - forbidden_sql_fragment
   timeout_seconds: 120
-  expected_unresolved_binding:
+  expected_planning_issue:
     type: metric
     raw_text: 增长力指数
     reason: metric_not_bound
@@ -4760,7 +4799,7 @@
   expected_columns: []
   expected_metrics: []
   expected_result: null
-  expected_blocked_by: business_binding
+  expected_blocked_by: semantic_planning
   forbidden_sql:
   - select
   - from
@@ -4780,7 +4819,7 @@
   fatal_errors:
   - forbidden_sql_fragment
   timeout_seconds: 120
-  expected_unresolved_binding:
+  expected_planning_issue:
     type: enum_value
     raw_text: 火星
     candidate_column: dim_region.region_name
@@ -4803,7 +4842,7 @@
   expected_columns: []
   expected_metrics: []
   expected_result: null
-  expected_blocked_by: business_binding
+  expected_blocked_by: semantic_planning
   forbidden_sql:
   - select
   - from
@@ -4823,7 +4862,7 @@
   fatal_errors:
   - forbidden_sql_fragment
   timeout_seconds: 120
-  expected_unresolved_binding:
+  expected_planning_issue:
     type: enum_value
     raw_text: 亚特兰蒂斯
     candidate_column: dim_region.region_name
@@ -4846,7 +4885,7 @@
   expected_columns: []
   expected_metrics: []
   expected_result: null
-  expected_blocked_by: business_binding
+  expected_blocked_by: semantic_planning
   forbidden_sql:
   - select
   - from
@@ -4866,7 +4905,7 @@
   fatal_errors:
   - forbidden_sql_fragment
   timeout_seconds: 120
-  expected_unresolved_binding:
+  expected_planning_issue:
     type: enum_value
     raw_text: 不存在品牌X
     candidate_column: dim_product.brand
@@ -4889,7 +4928,7 @@
   expected_columns: []
   expected_metrics: []
   expected_result: null
-  expected_blocked_by: business_binding
+  expected_blocked_by: semantic_planning
   forbidden_sql:
   - select
   - from
@@ -4909,7 +4948,7 @@
   fatal_errors:
   - forbidden_sql_fragment
   timeout_seconds: 120
-  expected_unresolved_binding:
+  expected_planning_issue:
     type: enum_value
     raw_text: 魔法用品
     candidate_column: dim_product.category
@@ -4932,7 +4971,7 @@
   expected_columns: []
   expected_metrics: []
   expected_result: null
-  expected_blocked_by: business_binding
+  expected_blocked_by: semantic_planning
   forbidden_sql:
   - select
   - from
@@ -4952,7 +4991,7 @@
   fatal_errors:
   - forbidden_sql_fragment
   timeout_seconds: 120
-  expected_unresolved_binding:
+  expected_planning_issue:
     type: enum_value
     raw_text: 幻影手机 Pro
     candidate_column: dim_product.product_name

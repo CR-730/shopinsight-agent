@@ -9,7 +9,8 @@ from pydantic import BaseModel, ConfigDict, Field
 from app.agent.context import DataAgentContext
 from app.agent.llm import generate_sql_llm
 from app.agent.llm_usage import ainvoke_llm_with_usage
-from app.agent.memory import format_conversation_messages, format_sql_memory_examples
+from app.agent.memory import format_sql_memory_examples
+from app.agent.semantic_planning.plan import SemanticQueryPlan
 from app.agent.state import DataAgentState
 from app.conf.app_config import app_config
 from app.core.log import logger
@@ -34,14 +35,15 @@ async def generate_sql(state: DataAgentState, runtime: Runtime[DataAgentContext]
         sql_context = state["sql_context"]
         table_infos = sql_context.get("tables") or []
         metric_infos = sql_context.get("metrics") or []
-        business_binding = state.get("business_binding") or {}
+        raw_plan = state.get("semantic_plan")
+        if raw_plan is None:
+            raise ValueError("semantic_plan is required for SQL generation")
+        semantic_plan = SemanticQueryPlan.model_validate(raw_plan).model_dump(
+            mode="json"
+        )
         date_info = sql_context.get("date") or {}
         db_info = sql_context.get("db") or {}
         query = state["query"]
-        conversation_history = (
-            format_conversation_messages(state.get("conversation_messages") or [])
-            or "无"
-        )
         sql_memory_context = (
             format_sql_memory_examples(state.get("sql_memory_examples") or []) or "无"
         )
@@ -52,12 +54,11 @@ async def generate_sql(state: DataAgentState, runtime: Runtime[DataAgentContext]
             input_variables=[
                 "table_infos",
                 "metric_infos",
-                "business_bindings",
-                "conversation_history",
+                "semantic_plan",
                 "sql_memory_context",
                 "date_info",
                 "db_info",
-                "query",
+                "query_for_explanation_only",
             ],
             partial_variables={"format_instructions": parser.get_format_instructions()},
         )
@@ -73,21 +74,13 @@ async def generate_sql(state: DataAgentState, runtime: Runtime[DataAgentContext]
                 "metric_infos": yaml.dump(
                     metric_infos, allow_unicode=True, sort_keys=False
                 ),
-                "business_bindings": yaml.dump(
-                    {
-                        "business_binding": business_binding,
-                        "validated_enum_values": _validated_enum_values(
-                            business_binding
-                        ),
-                    },
-                    allow_unicode=True,
-                    sort_keys=False,
+                "semantic_plan": yaml.dump(
+                    semantic_plan, allow_unicode=True, sort_keys=False
                 ),
-                "conversation_history": conversation_history,
                 "sql_memory_context": sql_memory_context,
                 "date_info": yaml.dump(date_info, allow_unicode=True, sort_keys=False),
                 "db_info": yaml.dump(db_info, allow_unicode=True, sort_keys=False),
-                "query": query,
+                "query_for_explanation_only": query,
             },
             step,
             runtime.context["cost_tracker"],
@@ -113,11 +106,3 @@ def _write_answer_delta(writer, text: str) -> None:
     content = str(text or "")
     for index in range(0, len(content), 12):
         writer({"type": "answer_delta", "delta": content[index : index + 12]})
-
-
-def _validated_enum_values(business_binding: dict) -> list[str]:
-    return [
-        str(literal)
-        for item in business_binding.get("filters") or []
-        for literal in item.get("allowed_sql_literals", [])
-    ]

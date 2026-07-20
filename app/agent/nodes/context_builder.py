@@ -1,4 +1,4 @@
-"""Build retrieval context before business binding."""
+"""Build retrieval context before semantic planning."""
 
 import asyncio
 

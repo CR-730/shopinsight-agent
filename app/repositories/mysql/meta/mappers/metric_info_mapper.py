@@ -18,12 +18,16 @@ class MetricInfoMapper:
     @staticmethod
     def to_entity(model: MetricInfoMySQL) -> MetricInfo:
         """把指标 ORM 模型转换为业务实体"""
+        if model.aggregation is None:
+            raise ValueError(f"metric_aggregation_missing: {model.id}")
         return MetricInfo(
             id=model.id,
             name=model.name,
             description=model.description,
             relevant_columns=[str(item) for item in as_list(model.relevant_columns)],
             alias=[str(item) for item in as_list(model.alias)],
+            aggregation=model.aggregation,
+            expression=model.expression,
         )
 
     @staticmethod

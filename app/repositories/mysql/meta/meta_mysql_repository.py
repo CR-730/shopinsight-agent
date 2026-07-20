@@ -67,6 +67,7 @@ class MetaMySQLRepository:
         self._column_infos_cache = None
         self._value_aliases_cache = None
         await self._ensure_value_alias_table()
+        await self.ensure_metric_semantics_schema()
         for table_name in (
             "column_metric",
             "value_alias",
@@ -141,6 +142,32 @@ class MetaMySQLRepository:
                 """
             )
         )
+
+    async def ensure_metric_semantics_schema(self) -> None:
+        """Idempotently add authoritative metric columns before a rebuild."""
+
+        result = await self.session.execute(
+            text(
+                "select column_name from information_schema.columns "
+                "where table_schema = database() and table_name = 'metric_info' "
+                "and column_name in ('aggregation', 'expression')"
+            )
+        )
+        # Read the single selected column positionally. MySQL/driver combinations
+        # may expose information_schema labels as COLUMN_NAME instead of
+        # column_name, while the scalar value is stable across both forms.
+        existing = {str(column_name) for column_name in result.scalars().all()}
+        if "aggregation" not in existing:
+            await self.session.execute(
+                text(
+                    "alter table metric_info "
+                    "add column aggregation varchar(32) null"
+                )
+            )
+        if "expression" not in existing:
+            await self.session.execute(
+                text("alter table metric_info add column expression text null")
+            )
 
     def save_table_infos(self, table_infos: list[TableInfo]):
         """批量保存表元数据。输入仍然是业务实体，而不是 ORM 模型"""

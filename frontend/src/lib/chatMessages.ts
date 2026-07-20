@@ -215,7 +215,7 @@ function stageLabel(step: string) {
   const normalized = step.toLowerCase();
   if (/intent|意图|理解|问题/.test(normalized)) return "理解问题";
   if (
-    /context|召回|检索|过滤|字段|指标|绑定|business|generate|生成/.test(normalized)
+    /context|召回|检索|过滤|字段|指标|绑定|semantic|规划|business|generate|生成/.test(normalized)
   ) {
     return "准备查询";
   }

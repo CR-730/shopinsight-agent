@@ -1,6 +1,7 @@
 """Single graph node for SQL validation, correction, and execution."""
 
 import json
+from dataclasses import asdict
 from datetime import date, datetime
 from decimal import Decimal
 
@@ -12,6 +13,7 @@ from app.agent.context import DataAgentContext
 from app.agent.failure import build_failure
 from app.agent.llm import llm
 from app.agent.llm_usage import ainvoke_llm_with_usage
+from app.agent.sql.plan_consistency import validate_sql_plan_consistency
 from app.agent.sql.sql_correction import correct_sql_candidate
 from app.agent.sql.sql_executor import SqlExecutionRequest, SqlExecutor
 from app.agent.sql.sql_guard import normalize_sql_for_execution
@@ -36,6 +38,15 @@ async def sql_executor(state: DataAgentState, runtime: Runtime[DataAgentContext]
         current_state["sql"] = validation["sql"]
         accumulated_update["sql"] = validation["sql"]
         last_validation_error = str(validation.get("validation_error") or "")
+        plan_differences = list(validation.get("plan_differences") or [])
+        accumulated_update["trace"] = {
+            **(current_state.get("trace") or {}),
+            **(accumulated_update.get("trace") or {}),
+            "sql_plan_consistency": {
+                "status": "pass" if not plan_differences else "failed",
+                "differences": plan_differences,
+            },
+        }
 
         if validation["status"] == "pass":
             run_update = await _execute_sql(current_state, executor, writer, runtime)
@@ -66,6 +77,7 @@ async def sql_executor(state: DataAgentState, runtime: Runtime[DataAgentContext]
             last_validation_error,
             correction_attempts=correction_attempts,
             max_correction_attempts=max_correction_attempts,
+            plan_differences=plan_differences,
         )
         correction_attempts = max(
             int(correction_update.get("attempts") or 0),
@@ -78,11 +90,7 @@ async def sql_executor(state: DataAgentState, runtime: Runtime[DataAgentContext]
             "sql_correction_attempts": correction_attempts,
         }
         accumulated_update.update(
-            {
-                key: value
-                for key, value in correction_update.items()
-                if key in {"sql"}
-            }
+            {key: value for key, value in correction_update.items() if key in {"sql"}}
         )
     return {
         **accumulated_update,
@@ -92,23 +100,61 @@ async def sql_executor(state: DataAgentState, runtime: Runtime[DataAgentContext]
 
 async def _pre_validate_sql(state: dict, executor: SqlExecutor) -> dict:
     sql = normalize_sql_for_execution(state["sql"])
+    semantic_plan = state.get("semantic_plan")
+    if not semantic_plan:
+        difference = {
+            "code": "semantic_plan_missing",
+            "path": "semantic_plan",
+            "expected": "trusted SemanticQueryPlan",
+            "actual": None,
+        }
+        return {
+            "sql": sql,
+            "status": "repairable_error",
+            "validation_error": format_plan_differences([difference]),
+            "plan_differences": [difference],
+        }
+
+    consistency = validate_sql_plan_consistency(sql, semantic_plan)
+    if not consistency.ok:
+        differences = [asdict(item) for item in consistency.differences]
+        return {
+            "sql": sql,
+            "status": "repairable_error",
+            "validation_error": format_plan_differences(differences),
+            "plan_differences": differences,
+        }
+
     result = await executor.pre_validate(state, SqlExecutionRequest(sql=sql))
     if result.status == "repairable_error":
         return {
             "sql": sql,
             "status": "repairable_error",
             "validation_error": result.error,
+            "plan_differences": [],
         }
     if result.status == "blocked":
         return {
             "sql": sql,
             "status": "blocked",
             "validation_error": result.error,
+            "plan_differences": [],
         }
-    return {"sql": sql, "status": "pass", "validation_error": None}
+    return {
+        "sql": sql,
+        "status": "pass",
+        "validation_error": None,
+        "plan_differences": [],
+    }
 
 
-async def _execute_sql(state: dict, executor: SqlExecutor, writer, runtime: Runtime) -> dict:
+def format_plan_differences(differences: list[dict]) -> str:
+    return json.dumps(differences, ensure_ascii=False, sort_keys=True)
+
+
+async def _execute_sql(
+    state: dict, executor: SqlExecutor, writer, runtime: Runtime
+) -> dict:
     writer({"type": "progress", "step": "执行查询", "status": "running"})
     result = await executor.execute(SqlExecutionRequest(sql=state["sql"]))
     if not result.ok:
@@ -194,10 +240,12 @@ def _format_result_for_llm(rows: list[dict]) -> str:
             return obj.isoformat()
         return str(obj)
 
-    return "\n".join(json.dumps(row, ensure_ascii=False, default=_default) for row in rows)
+    return "\n".join(
+        json.dumps(row, ensure_ascii=False, default=_default) for row in rows
+    )
 
 
 def _write_answer_delta(writer, text: str) -> None:
     content = str(text or "")
     for index in range(0, len(content), 12):
-        writer({"type": "answer_delta", "delta": content[index: index + 12]})
+        writer({"type": "answer_delta", "delta": content[index : index + 12]})

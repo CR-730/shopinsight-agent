@@ -5,50 +5,51 @@ from typing import Any, Literal
 from langchain_core.output_parsers import PydanticOutputParser
 from langchain_core.prompts import PromptTemplate
 from langgraph.runtime import Runtime
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from app.agent.context import DataAgentContext
 from app.agent.failure import build_failure
 from app.agent.llm import llm
 from app.agent.llm_usage import ainvoke_llm_with_usage
 from app.agent.state import DataAgentState
-from app.agent.stop_signal import split_stop_signal
 from app.conf.app_config import app_config
 from app.core.log import logger
 from app.prompt.prompt_loader import load_prompt
 
 
-class IntentRecognitionDecision(BaseModel):
-    """Structured decision returned by the LLM classifier."""
+class InputGuardDecision(BaseModel):
+    """Minimal pre-retrieval routing decision returned by the LLM guard."""
 
-    is_prompt_injection: bool = Field(
-        description="Whether the user question is a prompt-injection attempt."
+    decision: Literal["allow", "block"] = Field(
+        description="Allow the query to continue or block it before retrieval."
     )
-    attack_type: Literal[
-        "none",
-        "direct",
-        "indirect",
+    category: Literal[
+        "safe",
+        "missing_query_object",
+        "clearly_non_data",
+        "prompt_injection",
         "dangerous_operation",
         "privacy_detail",
         "system_leak",
-        "out_of_scope",
-        "incomplete",
-        "classifier_error",
-    ] = Field(description="The primary risk category.")
-    risk_level: Literal["low", "medium", "high"] = Field(
-        description="Risk severity of the detected intent."
-    )
-    should_block: bool = Field(
-        description="Whether the request should be blocked before retrieval."
-    )
-    reason: str = Field(description="A concise Chinese reason.")
-    user_response: str = Field(
+    ] = Field(description="The single routing category supporting the decision.")
+    user_message: str = Field(
         default="",
-        description=(
-            "A short Chinese user-facing understanding sentence for allowed queries; "
-            "empty for blocked queries."
-        ),
+        description="A concise Chinese clarification or refusal; empty when allowed.",
     )
+
+    @model_validator(mode="after")
+    def validate_decision_category(self):
+        if self.decision == "allow" and self.category != "safe":
+            raise ValueError("allow decision requires category=safe")
+        if self.decision == "block" and self.category == "safe":
+            raise ValueError("block decision requires a blocking category")
+        if self.decision == "block" and not self.user_message.strip():
+            raise ValueError("block decision requires user_message")
+        return self
+
+
+# One-version import compatibility for the old public class name.
+IntentRecognitionDecision = InputGuardDecision
 
 
 async def intent_recognition(
@@ -62,29 +63,32 @@ async def intent_recognition(
 
     query = state.get("query") or ""
     classifier_result = await classify_query_intent(query, runtime)
-    if _should_block_classifier_result(classifier_result):
-        reason = str(classifier_result.get("reason") or "").strip()
-        user_facing_message, _ = split_stop_signal(reason)
+    if _is_block_decision(classifier_result):
+        category = str(classifier_result.get("category") or "input_blocked")
+        user_facing_message = str(
+            classifier_result.get("user_message") or ""
+        ).strip()
         if user_facing_message:
             _write_answer_delta(writer, "\n\n" + user_facing_message)
-        logger.warning("%s classifier blocked query: %s", step, classifier_result)
-        writer({"type": "progress", "step": step, "status": "blocked", "error": reason})
+        logger.warning("{} classifier blocked query: {}", step, classifier_result)
+        writer(
+            {
+                "type": "progress",
+                "step": step,
+                "status": "blocked",
+                "error": category,
+            }
+        )
         return {
             "failure": build_failure(
                 category="input_guard",
                 stage="intent_recognition",
-                code=str(classifier_result.get("attack_type") or "input_blocked"),
-                message=reason or "intent_recognition blocked query",
+                code=category,
+                message=user_facing_message or "intent_recognition blocked query",
                 disposition="blocked",
                 user_message=user_facing_message,
             )
         }
-
-    user_response = str(classifier_result.get("user_response") or "").strip()
-    if not user_response:
-        user_response = "我会先理解你的问题，并继续检索相关经营数据。"
-    if user_response:
-        _write_answer_delta(writer, "\n\n" + user_response)
 
     writer({"type": "progress", "step": step, "status": "success"})
     return {"failure": None}
@@ -93,7 +97,7 @@ async def intent_recognition(
 async def classify_query_intent(
     query: str, runtime: Runtime[DataAgentContext]
 ) -> dict[str, Any]:
-    parser = PydanticOutputParser(pydantic_object=IntentRecognitionDecision)
+    parser = PydanticOutputParser(pydantic_object=InputGuardDecision)
     prompt = PromptTemplate(
         template=load_prompt("pre_rag_guard"),
         input_variables=["query"],
@@ -114,25 +118,18 @@ async def classify_query_intent(
         )
         return result.model_dump()
     except Exception as exc:
-        logger.warning("意图识别失败，保守阻断：%s", exc)
+        logger.warning("意图识别失败，保守阻断：{}", exc)
         return {
-            "is_prompt_injection": False,
-            "attack_type": "classifier_error",
-            "risk_level": "high",
-            "should_block": True,
-            "reason": "我现在没能可靠判断这个问题是否可以进入问数流程，请稍后再试。find_error",
-            "user_response": "",
+            "decision": "block",
+            "category": "classifier_error",
+            "user_message": (
+                "我现在没能可靠判断这个问题是否可以进入问数流程，请稍后再试。"
+            ),
         }
 
 
-def _should_block_classifier_result(result: dict[str, Any]) -> bool:
-    risk_level = result.get("risk_level")
-    attack_type = result.get("attack_type")
-    if result.get("is_prompt_injection") is True and risk_level == "high":
-        return True
-    if attack_type in {"out_of_scope", "incomplete"}:
-        return result.get("should_block") is True and risk_level in {"medium", "high"}
-    return result.get("should_block") is True
+def _is_block_decision(result: dict[str, Any]) -> bool:
+    return result.get("decision") == "block"
 
 
 def _ablation_options(context: dict[str, Any]) -> dict[str, Any]:

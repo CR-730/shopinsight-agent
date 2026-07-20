@@ -1,6 +1,9 @@
+from typing import get_args
+
+from app.agent.failure import FailureCategory
 from app.agent.memory import build_sql_tool_memory
 from app.agent.sql_loop import route_after_safety_guard
-from app.agent.state import DataAgentState
+from app.agent.state import DataAgentState, TraceState
 from app.evaluation.cases import EvalCase, evaluate_case
 from app.services import query_service
 
@@ -9,7 +12,22 @@ def test_state_does_not_expose_binding_candidates():
     assert "binding_candidates" not in DataAgentState.__optional_keys__
 
 
-def test_query_service_does_not_run_business_binding_candidate_extraction():
+def test_state_exposes_plan_but_never_draft():
+    assert "semantic_plan" in DataAgentState.__optional_keys__
+    assert "semantic_draft" not in DataAgentState.__optional_keys__
+
+
+def test_trace_can_expose_sanitized_planning_issues():
+    assert "planning_issues" in TraceState.__optional_keys__
+
+
+def test_runtime_state_and_failure_categories_have_no_legacy_binding_contract():
+    legacy_name = "business_" + "binding"
+    assert legacy_name not in DataAgentState.__optional_keys__
+    assert legacy_name not in get_args(FailureCategory)
+
+
+def test_query_service_does_not_run_legacy_candidate_extraction():
     assert not hasattr(query_service, "extract_binding_candidates")
 
 
@@ -39,18 +57,24 @@ def test_safety_route_uses_unified_failure_state():
     assert route_after_safety_guard(state) == "blocked"
 
 
+def test_safety_route_stops_failed_system_state():
+    state = {
+        "failure": {
+            "category": "system",
+            "stage": "context_compaction",
+            "code": "metadata_column_not_found",
+            "message": "missing metadata",
+            "disposition": "failed",
+        }
+    }
+
+    assert route_after_safety_guard(state) == "blocked"
+
+
 def test_sql_memory_does_not_save_state_with_unified_failure():
     state = {
         "sql": "select sum(order_amount) from fact_order",
         "output": {"rows": [{"GMV": 100}]},
-        "business_binding": {
-            "metrics": [{"canonical_metric": "GMV"}],
-            "filters": [],
-            "groups": [],
-            "time": None,
-            "unresolved": [],
-            "ambiguous": [],
-        },
         "failure": {
             "category": "sql_execution",
             "stage": "tool_execution",

@@ -23,6 +23,7 @@ async def correct_sql_candidate(
     *,
     correction_attempts: int,
     max_correction_attempts: int,
+    plan_differences: list[dict] | None = None,
 ):
     correction_attempts = correction_attempts + 1
     sql = state["sql"]
@@ -36,41 +37,37 @@ async def correct_sql_candidate(
         PromptTemplate(
             template=load_prompt("correct_sql"),
             input_variables=[
+                "semantic_plan",
                 "table_infos",
-                "metric_infos",
-                "date_info",
-                "db_info",
-                "query",
                 "sql",
-                "error",
+                "differences",
             ],
         ),
         correct_sql_llm,
         StrOutputParser(),
         {
+            "semantic_plan": yaml.dump(
+                state.get("semantic_plan") or {},
+                allow_unicode=True,
+                sort_keys=False,
+            ),
             "table_infos": yaml.dump(
                 (state.get("sql_context") or {}).get("tables") or [],
                 allow_unicode=True,
                 sort_keys=False,
             ),
-            "metric_infos": yaml.dump(
-                (state.get("sql_context") or {}).get("metrics") or [],
-                allow_unicode=True,
-                sort_keys=False,
-            ),
-            "date_info": yaml.dump(
-                (state.get("sql_context") or {}).get("date") or {},
-                allow_unicode=True,
-                sort_keys=False,
-            ),
-            "db_info": yaml.dump(
-                (state.get("sql_context") or {}).get("db") or {},
-                allow_unicode=True,
-                sort_keys=False,
-            ),
-            "query": state["query"],
             "sql": sql,
-            "error": validation_error,
+            "differences": yaml.dump(
+                plan_differences
+                or [
+                    {
+                        "code": "sql_validation_error",
+                        "message": validation_error,
+                    }
+                ],
+                allow_unicode=True,
+                sort_keys=False,
+            ),
         },
         "校正SQL",
         context["cost_tracker"],
@@ -91,6 +88,7 @@ async def correct_sql_candidate(
 
 
 def is_same_sql_after_normalization(original_sql: str, corrected_sql: str) -> bool:
-    return normalize_sql_for_execution(original_sql).lower() == normalize_sql_for_execution(
-        corrected_sql
-    ).lower()
+    return (
+        normalize_sql_for_execution(original_sql).lower()
+        == normalize_sql_for_execution(corrected_sql).lower()
+    )

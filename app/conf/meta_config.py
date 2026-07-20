@@ -48,6 +48,10 @@ class MetricConfig:
     description: str
     relevant_columns: list[str]
     alias: list[str]
+    # OmegaConf structured configs do not support Literal annotations.
+    # The service validates this string against MetricInfo's authoritative contract.
+    aggregation: str
+    expression: str | None = None
 
 
 @dataclass

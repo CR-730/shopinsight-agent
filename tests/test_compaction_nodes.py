@@ -1,12 +1,10 @@
-﻿import asyncio
+import asyncio
 from types import SimpleNamespace
 
-from app.agent import context_compaction as context_compaction_helpers
 from app.agent.node_observer import traced_node
 from app.agent.nodes import context_builder as context_builder_module
 from app.agent.nodes import context_compaction as context_compaction_module
 from app.agent.nodes import sql_executor as sql_executor_module
-from app.entities.column_info import ColumnInfo
 
 
 def test_traced_node_appends_timing_without_losing_trace():
@@ -60,12 +58,28 @@ def test_context_builder_returns_structured_context_and_trace(monkeypatch):
         assert state["retrieved_metric_infos"] == ["metric"]
         return {"table_infos": ["table"], "metric_infos": ["metric_info"]}
 
-    monkeypatch.setattr(context_builder_module, "recall_sql_memory_context", fake_recall_sql_memory_context)
-    monkeypatch.setattr(context_builder_module, "extract_retrieval_keywords", fake_extract_retrieval_keywords)
-    monkeypatch.setattr(context_builder_module, "recall_column_context", fake_recall_column_context)
-    monkeypatch.setattr(context_builder_module, "recall_value_context", fake_recall_value_context)
-    monkeypatch.setattr(context_builder_module, "recall_metric_context", fake_recall_metric_context)
-    monkeypatch.setattr(context_builder_module, "merge_retrieved_context", fake_merge_retrieved_context)
+    monkeypatch.setattr(
+        context_builder_module,
+        "recall_sql_memory_context",
+        fake_recall_sql_memory_context,
+    )
+    monkeypatch.setattr(
+        context_builder_module,
+        "extract_retrieval_keywords",
+        fake_extract_retrieval_keywords,
+    )
+    monkeypatch.setattr(
+        context_builder_module, "recall_column_context", fake_recall_column_context
+    )
+    monkeypatch.setattr(
+        context_builder_module, "recall_value_context", fake_recall_value_context
+    )
+    monkeypatch.setattr(
+        context_builder_module, "recall_metric_context", fake_recall_metric_context
+    )
+    monkeypatch.setattr(
+        context_builder_module, "merge_retrieved_context", fake_merge_retrieved_context
+    )
 
     result = asyncio.run(
         context_builder_module.context_builder(
@@ -82,7 +96,11 @@ def test_context_builder_returns_structured_context_and_trace(monkeypatch):
                 "similarity": 0.9,
             }
         ],
-        "retrieval_context": {"columns": ["column"], "metrics": ["metric"], "values": ["value"]},
+        "retrieval_context": {
+            "columns": ["column"],
+            "metrics": ["metric"],
+            "values": ["value"],
+        },
         "sql_context": {"tables": ["table"], "metrics": ["metric_info"]},
         "trace": {
             "keywords": ["GMV"],
@@ -94,30 +112,38 @@ def test_context_builder_returns_structured_context_and_trace(monkeypatch):
 
 
 def test_context_compaction_returns_sql_context(monkeypatch):
-    async def fake_filter_table_context(state, context):
-        assert state["sql_context"]["tables"] == ["raw_table"]
-        assert context == {"dw_mysql_repository": "repo"}
-        return {"table_infos": ["filtered_table"]}
-
-    def fake_filter_metric_context(state):
-        assert state["sql_context"]["tables"] == ["filtered_table"]
-        return {"metric_infos": ["filtered_metric"]}
-
-    async def fake_add_runtime_context(state, context):
-        assert state["sql_context"]["metrics"] == ["filtered_metric"]
+    async def fake_compile_context_from_plan(state, context):
+        assert state["semantic_plan"] == {"version": "1"}
         assert context == {"dw_mysql_repository": "repo"}
         return {
-            "date_info": {"date": "2026-06-03", "weekday": "Wednesday", "quarter": "Q2"},
+            "table_infos": ["filtered_table"],
+            "metric_infos": ["filtered_metric"],
+        }
+
+    async def fake_add_runtime_context(state, context):
+        assert state["semantic_plan"] == {"version": "1"}
+        assert context == {"dw_mysql_repository": "repo"}
+        return {
+            "date_info": {
+                "date": "2026-06-03",
+                "weekday": "Wednesday",
+                "quarter": "Q2",
+            },
             "db_info": {"dialect": "mysql", "version": "8.0"},
         }
 
-    monkeypatch.setattr(context_compaction_module, "filter_table_context", fake_filter_table_context)
-    monkeypatch.setattr(context_compaction_module, "filter_metric_context", fake_filter_metric_context)
-    monkeypatch.setattr(context_compaction_module, "add_runtime_context", fake_add_runtime_context)
+    monkeypatch.setattr(
+        context_compaction_module,
+        "compile_context_from_plan",
+        fake_compile_context_from_plan,
+    )
+    monkeypatch.setattr(
+        context_compaction_module, "add_runtime_context", fake_add_runtime_context
+    )
 
     result = asyncio.run(
         context_compaction_module.context_compaction(
-            {"query": "统计 GMV", "sql_context": {"tables": ["raw_table"]}},
+            {"query": "统计 GMV", "semantic_plan": {"version": "1"}},
             SimpleNamespace(context={"dw_mysql_repository": "repo"}),
         )
     )
@@ -132,76 +158,43 @@ def test_context_compaction_returns_sql_context(monkeypatch):
     }
 
 
-def test_filter_table_context_adds_missing_protected_columns_from_metadata(monkeypatch):
-    async def fake_ainvoke_llm_with_usage(*args, **kwargs):
-        return {"dim_date": ["date_id", "quarter"]}
-
-    class MetaRepository:
-        async def list_column_infos(self):
-            return [
-                ColumnInfo(
-                    id="dim_date.year",
-                    name="year",
-                    type="int",
-                    role="dimension",
-                    examples=[2025],
-                    description="年份",
-                    alias=["年份"],
-                    table_id="dim_date",
-                )
-            ]
+def test_context_compaction_turns_metadata_issue_into_failed_system_failure(
+    monkeypatch,
+):
+    async def fake_compile_context_from_plan(state, context):
+        return {
+            "table_infos": [],
+            "issue": {
+                "category": "system",
+                "type": "column",
+                "reason": "metadata_column_not_found",
+                "candidate_ids": ["ghost_table.ghost_column"],
+            },
+        }
 
     monkeypatch.setattr(
-        context_compaction_helpers,
-        "ainvoke_llm_with_usage",
-        fake_ainvoke_llm_with_usage,
+        context_compaction_module,
+        "compile_context_from_plan",
+        fake_compile_context_from_plan,
     )
 
     result = asyncio.run(
-        context_compaction_helpers.filter_table_context(
+        context_compaction_module.context_compaction(
             {
-                "query": "2025年第一季度各大区销售额",
-                "business_binding": {
-                    "time": {
-                        "required_columns": [
-                            "fact_order.date_id",
-                            "dim_date.year",
-                            "dim_date.quarter",
-                        ]
-                    }
-                },
-                "sql_context": {
-                    "tables": [
-                        {
-                            "name": "dim_date",
-                            "role": "dimension",
-                            "columns": [
-                                {
-                                    "name": "date_id",
-                                    "role": "primary_key",
-                                    "alias": ["日期ID"],
-                                    "examples": [20250101],
-                                },
-                                {
-                                    "name": "quarter",
-                                    "role": "dimension",
-                                    "alias": ["季度"],
-                                    "examples": ["Q1"],
-                                },
-                            ],
-                        }
-                    ]
-                },
+                "query": "幽灵字段",
+                "semantic_plan": {"version": "1"},
             },
-            {
-                "cost_tracker": None,
-                "meta_mysql_repository": MetaRepository(),
-            },
+            SimpleNamespace(context={}),
         )
     )
 
-    columns = result["table_infos"][0]["columns"]
-    assert {column["name"] for column in columns} == {"date_id", "quarter", "year"}
+    assert result["failure"] == {
+        "category": "system",
+        "stage": "context_compaction",
+        "code": "metadata_column_not_found",
+        "message": "Required column metadata was not found",
+        "disposition": "failed",
+    }
 
 
 def test_sql_executor_returns_corrected_sql_and_execution_state(monkeypatch):
@@ -218,13 +211,20 @@ def test_sql_executor_returns_corrected_sql_and_execution_state(monkeypatch):
         return {"sql": "select corrected", "status": "pass", "validation_error": None}
 
     async def fake_correct_sql_candidate(
-        state, context, validation_error, *, correction_attempts, max_correction_attempts
+        state,
+        context,
+        validation_error,
+        *,
+        correction_attempts,
+        max_correction_attempts,
+        plan_differences,
     ):
         assert state["sql"] == "select bad"
         assert validation_error == "Unknown column"
         assert context["dw_mysql_repository"] == "repo"
         assert correction_attempts == 0
         assert max_correction_attempts == 2
+        assert plan_differences == []
         return {"sql": "select corrected", "attempts": 1}
 
     async def fake_execute_sql(state, executor, writer, runtime):
@@ -267,8 +267,15 @@ def test_sql_executor_returns_failed_correction_state(monkeypatch):
         }
 
     async def fake_correct_sql_candidate(
-        state, context, validation_error, *, correction_attempts, max_correction_attempts
+        state,
+        context,
+        validation_error,
+        *,
+        correction_attempts,
+        max_correction_attempts,
+        plan_differences,
     ):
+        assert plan_differences == []
         return {"sql": state["sql"], "attempts": correction_attempts + 1}
 
     monkeypatch.setattr(sql_executor_module, "_pre_validate_sql", fake_pre_validate_sql)
@@ -313,9 +320,16 @@ def test_sql_executor_has_internal_loop_limit(monkeypatch):
         }
 
     async def fake_correct_sql_candidate(
-        state, context, validation_error, *, correction_attempts, max_correction_attempts
+        state,
+        context,
+        validation_error,
+        *,
+        correction_attempts,
+        max_correction_attempts,
+        plan_differences,
     ):
         nonlocal corrections
+        assert plan_differences == []
         corrections += 1
         return {"sql": state["sql"]}
 

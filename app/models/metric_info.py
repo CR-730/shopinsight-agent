@@ -26,3 +26,9 @@ class MetricInfoMySQL(Base):
         JSON, comment="关联字段"
     )
     alias: Mapped[dict | list | None] = mapped_column(JSON, comment="指标别名")
+    aggregation: Mapped[str | None] = mapped_column(
+        String(32), nullable=True, comment="权威聚合类型"
+    )
+    expression: Mapped[str | None] = mapped_column(
+        Text, nullable=True, comment="受控指标表达式"
+    )

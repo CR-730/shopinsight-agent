@@ -6,9 +6,12 @@ DEFAULT_MAX_SQL_CORRECTION_ATTEMPTS = 2
 
 
 def route_after_safety_guard(state: Mapping) -> str:
-    """Route safe state to next step and blocked state to END."""
+    """Route a state without terminal failure to the next graph step."""
 
     failure = state.get("failure")
-    if isinstance(failure, Mapping) and failure.get("disposition") == "blocked":
+    if isinstance(failure, Mapping) and failure.get("disposition") in {
+        "blocked",
+        "failed",
+    }:
         return "blocked"
     return "continue"

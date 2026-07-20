@@ -166,16 +166,19 @@ tables:
 metrics:
   - name: ORDER_COUNT
     description: 订单数，使用订单唯一标识 order_id 去重计数。
+    aggregation: count_distinct
     relevant_columns:
       - fact_order.order_id
     alias: [订单, 订单数, 订单量, 订单笔数]
   - name: GMV
     description: 全称Gross Merchandise Value，表示所有订单的成交金额总和。
+    aggregation: sum
     relevant_columns:
       - fact_order.order_amount
     alias: [成交总额, 订单总额, 销售额, 成交额, 销售总额, 销售金额, 订单金额]
   - name: AOV
     description: 全称Average Order Value，表示所有订单的成交金额平均值。
+    aggregation: avg
     relevant_columns:
       - fact_order.order_amount
     alias: [客单价, 平均单价, 平均订单金额]

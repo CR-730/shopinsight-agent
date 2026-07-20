@@ -1,4 +1,4 @@
-﻿"""Minimal Vanna-style conversation memory eval."""
+"""Minimal Vanna-style conversation memory eval."""
 
 from __future__ import annotations
 
@@ -68,7 +68,9 @@ async def _check_conversation_user_isolation() -> dict[str, Any]:
     await repository.create_conversation("conv-1", "user-a")
 
     service = SimpleNamespace(agent_memory_repository=repository)
-    loaded = await QueryService._load_or_create_conversation(service, "conv-1", "user-b")
+    loaded = await QueryService._load_or_create_conversation(
+        service, "conv-1", "user-b"
+    )
 
     return _result(
         "conversation_id/user_id 隔离",
@@ -139,7 +141,9 @@ async def _check_followup_memory_question_shape() -> dict[str, Any]:
     question = repository.saved_tool_usage[0]["question"]
     return _result(
         "追问 memory question 包含用户上下文且不含 assistant 摘要",
-        "统计华北 GMV" in question and "那华东呢" in question and "查询成功" not in question,
+        "统计华北 GMV" in question
+        and "那华东呢" in question
+        and "查询成功" not in question,
     )
 
 
@@ -199,14 +203,28 @@ async def _check_blocked_and_error_do_not_write_memory() -> dict[str, Any]:
             final_state=final_state,
         )
 
-    return _result("失败或无 binding 不写长期 SQL memory", repository.saved_tool_usage == [])
+    return _result(
+        "失败或无 binding 不写长期 SQL memory", repository.saved_tool_usage == []
+    )
 
 
 def _successful_state() -> dict[str, Any]:
     return {
         "sql": "select 1 as GMV",
         "output": {"rows": [{"GMV": 1}]},
-        "business_binding": {"metrics": [{"canonical_metric": "GMV"}]},
+        "semantic_plan": {
+            "version": "1",
+            "metadata_version": "meta-v1",
+            "measures": [],
+            "dimensions": [],
+            "predicates": [],
+            "order_by": [],
+            "limit": None,
+            "joins": [],
+            "required_table_ids": [],
+            "required_column_ids": [],
+            "provenance": [],
+        },
     }
 
 
@@ -225,4 +243,3 @@ def _context(
 
 def _result(name: str, passed: bool) -> dict[str, Any]:
     return {"name": name, "passed": passed}
-

@@ -31,6 +31,7 @@ from app.repositories.qdrant.column_qdrant_repository import ColumnQdrantReposit
 from app.repositories.qdrant.metric_qdrant_repository import MetricQdrantRepository
 from app.repositories.qdrant.value_qdrant_repository import ValueQdrantRepository
 from app.services.meta_point_id import build_meta_point_id
+from app.services.metric_definition_validator import validate_metric_definition
 
 
 class MetaKnowledgeService:
@@ -277,7 +278,10 @@ class MetaKnowledgeService:
                 description=metric.description,
                 relevant_columns=metric.relevant_columns,
                 alias=metric.alias,
+                aggregation=metric.aggregation,
+                expression=metric.expression,
             )
+            validate_metric_definition(metric_info)
             metric_infos.append(metric_info)
             for column in metric.relevant_columns:
                 # ColumnMetric 单独表达“某个指标依赖某个字段”这层关系

@@ -1,0 +1,102 @@
+- id: semantic_q1_north_gmv
+  query: 2025年第一季度华北地区的销售额
+  suite: realistic
+  difficulty: hard
+  capabilities: [semantic_planning, plan_consistency, sql_generation, sql_validation, tool_execution]
+  tags: [quarter, enum_value, join, oracle]
+  risk_points: [时间边界遗漏, 枚举值改写, 地区连接错误]
+  expected_semantic_plan:
+    measures: [{metric_id: GMV, output_alias: 销售额}]
+    predicates:
+      - {kind: temporal, column_id: fact_order.date_id, start_date_id: 20250101, end_date_id: 20250331, grain: quarter}
+      - {kind: enum, column_id: dim_region.region_name, canonical_values: [华北]}
+    joins: [{left_column_id: fact_order.region_id, right_column_id: dim_region.region_id, join_type: inner}]
+    required_table_ids: [fact_order, dim_region]
+  expected_sql_plan_consistent: true
+  expected_result: {mode: non_empty}
+  oracle_sql: |
+    SELECT SUM(fo.order_amount) AS 销售额
+    FROM fact_order AS fo
+    JOIN dim_region AS dr ON fo.region_id = dr.region_id
+    WHERE fo.date_id BETWEEN 20250101 AND 20250331
+      AND dr.region_name = '华北'
+  timeout_seconds: 300
+
+- id: semantic_q1_top5_products
+  query: 2025年第一季度销售额最高的前5个商品
+  suite: realistic
+  difficulty: hard
+  capabilities: [semantic_planning, plan_consistency, sql_generation, sql_validation, tool_execution]
+  tags: [quarter, topn, ordering, join, oracle]
+  risk_points: [漏时间, 排序反向, Limit错误, 商品连接错误]
+  expected_semantic_plan:
+    measures: [{metric_id: GMV, output_alias: 销售额}]
+    dimensions: [{column_id: dim_product.product_name, role: group_by, output_alias: 商品}]
+    predicates:
+      - {kind: temporal, column_id: fact_order.date_id, start_date_id: 20250101, end_date_id: 20250331, grain: quarter}
+    order_by: [{target_type: measure, target_id: GMV, direction: desc}]
+    limit: 5
+    joins: [{left_column_id: fact_order.product_id, right_column_id: dim_product.product_id, join_type: inner}]
+    required_table_ids: [fact_order, dim_product]
+  expected_sql_plan_consistent: true
+  expected_result: {mode: non_empty}
+  oracle_sql: |
+    SELECT dp.product_name AS 商品, SUM(fo.order_amount) AS 销售额
+    FROM fact_order AS fo
+    JOIN dim_product AS dp ON fo.product_id = dp.product_id
+    WHERE fo.date_id BETWEEN 20250101 AND 20250331
+    GROUP BY dp.product_name
+    ORDER BY 销售额 DESC
+    LIMIT 5
+  order_sensitive: true
+  timeout_seconds: 300
+
+- id: semantic_q1_region_gmv_over_10000
+  query: 2025年第一季度销售额大于10000元的地区，按销售额降序
+  suite: realistic
+  difficulty: hard
+  capabilities: [semantic_planning, plan_consistency, sql_generation, sql_validation, tool_execution]
+  tags: [quarter, having, ordering, join, oracle]
+  risk_points: [WHERE和HAVING错位, 漏时间, 排序反向]
+  expected_semantic_plan:
+    measures: [{metric_id: GMV, output_alias: 销售额}]
+    dimensions: [{column_id: dim_region.region_name, role: group_by, output_alias: 地区}]
+    predicates:
+      - {kind: temporal, column_id: fact_order.date_id, start_date_id: 20250101, end_date_id: 20250331, grain: quarter}
+      - {kind: numeric, target_type: measure, target_id: GMV, operator: gt, values: ['10000'], clause: having}
+    order_by: [{target_type: measure, target_id: GMV, direction: desc}]
+    joins: [{left_column_id: fact_order.region_id, right_column_id: dim_region.region_id, join_type: inner}]
+    required_table_ids: [fact_order, dim_region]
+  expected_sql_plan_consistent: true
+  expected_result: {mode: non_empty}
+  oracle_sql: |
+    SELECT dr.region_name AS 地区, SUM(fo.order_amount) AS 销售额
+    FROM fact_order AS fo
+    JOIN dim_region AS dr ON fo.region_id = dr.region_id
+    WHERE fo.date_id BETWEEN 20250101 AND 20250331
+    GROUP BY dr.region_name
+    HAVING SUM(fo.order_amount) > 10000
+    ORDER BY 销售额 DESC
+  order_sensitive: true
+  timeout_seconds: 300
+
+- id: semantic_region_alias_gmv
+  query: 北方区域的销售额
+  suite: regression
+  difficulty: medium
+  capabilities: [semantic_planning, plan_consistency, sql_generation, tool_execution]
+  tags: [enum_alias, exact_value, oracle]
+  risk_points: [把别名写入SQL而非规范值]
+  expected_semantic_plan:
+    measures: [{metric_id: GMV, output_alias: 销售额}]
+    predicates:
+      - {kind: enum, column_id: dim_region.region_name, canonical_values: [华北]}
+    required_table_ids: [fact_order, dim_region]
+  expected_sql_plan_consistent: true
+  expected_result: {mode: non_empty}
+  oracle_sql: |
+    SELECT SUM(fo.order_amount) AS 销售额
+    FROM fact_order AS fo
+    JOIN dim_region AS dr ON fo.region_id = dr.region_id
+    WHERE dr.region_name = '华北'
+  timeout_seconds: 300

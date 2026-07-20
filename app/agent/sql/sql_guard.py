@@ -7,6 +7,7 @@ from sqlglot import expressions as exp
 from sqlglot import parse
 from sqlglot.errors import ParseError
 
+from app.agent.semantic_planning.plan import EnumPredicate, SemanticQueryPlan
 from app.conf.policy_config import load_policy_config
 
 
@@ -60,7 +61,7 @@ def validate_sql_before_execution(state: dict[str, Any], sql: str) -> str | None
 
     unknown_value = _unknown_literal_value(state, expression)
     if unknown_value:
-        return f"SQL 使用了未召回的枚举值：{unknown_value}"
+        return f"SQL 使用了未授权的枚举值：{unknown_value}"
 
     if _looks_like_detail_query(expression, lowered_query):
         return "禁止执行用户或订单明细查询"
@@ -360,17 +361,7 @@ def _unknown_literal_value(
     state: dict[str, Any],
     expression: exp.Expression,
 ) -> str | None:
-    known_literals = {
-        str(getattr(value_info, "value", ""))
-        for value_info in (state.get("retrieval_context") or {}).get("values") or []
-        if getattr(value_info, "value", None)
-    }
-    business_binding = state.get("business_binding") or {}
-    known_literals.update(
-        str(literal)
-        for resolved_filter in business_binding.get("filters") or []
-        for literal in resolved_filter.get("allowed_sql_literals", [])
-    )
+    known_literals = _known_literal_values(state)
     for literal_expression in expression.find_all(exp.Literal):
         if not literal_expression.is_string:
             continue
@@ -380,6 +371,22 @@ def _unknown_literal_value(
         if _looks_like_business_literal(literal) and literal not in known_literals:
             return literal
     return None
+
+
+def _known_literal_values(state: dict[str, Any]) -> set[str]:
+    raw_plan = state.get("semantic_plan")
+    if not raw_plan:
+        return set()
+    try:
+        plan = SemanticQueryPlan.model_validate(raw_plan)
+    except ValueError:
+        return set()
+    return {
+        literal
+        for predicate in plan.predicates
+        if isinstance(predicate, EnumPredicate)
+        for literal in predicate.allowed_sql_literals
+    }
 
 
 def _looks_like_temporal_literal(literal: str) -> bool:

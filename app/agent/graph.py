@@ -1,7 +1,7 @@
 ﻿"""Agent graph for the e-commerce NL2SQL flow.
 
 The visible graph is intentionally compact:
-intent recognition -> context builder -> business binding -> context compaction
+intent recognition -> context builder -> semantic planning -> context compaction
 -> SQL generation -> SQL executor.
 
 Detailed retrieval, context pruning, SQL validation, correction, and execution
@@ -16,11 +16,11 @@ from langgraph.graph import StateGraph
 from app.agent.context import DataAgentContext
 from app.agent.cost import CostRates, CostTracker
 from app.agent.node_observer import traced_node
-from app.agent.nodes.business_binding import business_binding
 from app.agent.nodes.context_builder import context_builder
 from app.agent.nodes.context_compaction import context_compaction
 from app.agent.nodes.generate_sql import generate_sql
 from app.agent.nodes.intent_recognition import intent_recognition
+from app.agent.nodes.semantic_planning import semantic_planning
 from app.agent.nodes.sql_executor import sql_executor
 from app.agent.sql_loop import (
     route_after_safety_guard,
@@ -48,7 +48,9 @@ graph_builder.add_node(
     "intent_recognition", traced_node("intent_recognition", intent_recognition)
 )
 graph_builder.add_node("context_builder", traced_node("context_builder", context_builder))
-graph_builder.add_node("business_binding", traced_node("business_binding", business_binding))
+graph_builder.add_node(
+    "semantic_planning", traced_node("semantic_planning", semantic_planning)
+)
 graph_builder.add_node(
     "context_compaction", traced_node("context_compaction", context_compaction)
 )
@@ -65,11 +67,11 @@ graph_builder.add_conditional_edges(
         "blocked": END,
     },
 )
-graph_builder.add_edge("context_builder", "business_binding")
+graph_builder.add_edge("context_builder", "semantic_planning")
 
-# Business binding is the only business-level blocking decision.
+# Semantic planning blocks unresolved semantics; compaction can later block ambiguous joins.
 graph_builder.add_conditional_edges(
-    source="business_binding",
+    source="semantic_planning",
     path=route_after_safety_guard,
     path_map={
         "continue": "context_compaction",
@@ -78,7 +80,14 @@ graph_builder.add_conditional_edges(
 )
 
 # Compact table and metric context, then add runtime SQL context.
-graph_builder.add_edge("context_compaction", "generate_sql")
+graph_builder.add_conditional_edges(
+    source="context_compaction",
+    path=route_after_safety_guard,
+    path_map={
+        "continue": "generate_sql",
+        "blocked": END,
+    },
+)
 graph_builder.add_edge("generate_sql", "sql_executor")
 
 # SQL validation, correction, and execution are hidden behind one graph node.

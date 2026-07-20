@@ -107,31 +107,19 @@ class InMemoryConversationStore:
 
 
 def build_sql_tool_memory(question: str, state: dict[str, Any]) -> ToolMemory | None:
-    # 长期 SQL 记忆只保存成功执行且业务绑定完整的样例。
-    # 原始对话文本和半成品绑定不写入可复用记忆，避免后续 SQL 生成
-    # 继承失败轮次或歧义轮次的上下文。
     sql = str(state.get("sql") or "").strip()
     output = state.get("output") or {}
     rows = output.get("rows") or []
-    business_binding = _trusted_business_binding(state)
-    binding_has_issue = bool(
-        (state.get("business_binding") or {}).get("unresolved")
-        or (state.get("business_binding") or {}).get("ambiguous")
-    )
-    if (
-        not sql
-        or not rows
-        or not business_binding
-        or state.get("failure")
-        or binding_has_issue
-    ):
+    semantic_plan = _trusted_semantic_plan(state)
+    if not sql or not rows or semantic_plan is None or state.get("failure"):
         return None
     return ToolMemory(
         question=question,
         tool_name=SQL_TOOL_NAME,
         args={
             "sql": sql,
-            "business_binding": business_binding,
+            "semantic_plan": semantic_plan,
+            "metadata_version": semantic_plan["metadata_version"],
         },
         success=True,
     )
@@ -234,12 +222,20 @@ def build_retrieval_query(
     return f"{context}\nuser: {query}" if context else query
 
 
-def _trusted_business_binding(state: dict[str, Any]) -> dict[str, Any]:
-    """只返回已经过校验、可以安全写入 SQL 记忆的绑定槽位。"""
+def _trusted_semantic_plan(state: dict[str, Any]) -> dict[str, Any] | None:
+    """Validate and minimize the plan before it crosses the memory boundary."""
 
-    binding = dict(state.get("business_binding") or {})
-    return {
-        key: value
-        for key, value in binding.items()
-        if key in {"metrics", "filters", "groups", "time"} and value
-    }
+    from app.agent.semantic_planning.plan import SemanticQueryPlan
+
+    raw_plan = state.get("semantic_plan")
+    if not raw_plan:
+        return None
+    try:
+        plan = SemanticQueryPlan.model_validate(raw_plan)
+    except ValueError:
+        return None
+    sanitized = plan.model_dump(mode="json")
+    # Provenance contains user wording and verbose evidence. SQL memory needs
+    # canonical semantics, not the original utterance or candidate rationale.
+    sanitized["provenance"] = []
+    return sanitized

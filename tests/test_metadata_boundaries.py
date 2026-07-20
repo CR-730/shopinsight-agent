@@ -50,6 +50,8 @@ def test_metric_mapper_decodes_json_string_fields():
             description="销售额",
             relevant_columns='["fact_order.order_amount"]',
             alias='["销售额"]',
+            aggregation="sum",
+            expression=None,
         )
     )
 

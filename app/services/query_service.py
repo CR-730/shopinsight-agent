@@ -8,6 +8,7 @@ import asyncio
 import json
 import uuid
 from collections.abc import AsyncIterator
+from datetime import date
 
 from langchain_core.embeddings import Embeddings
 
@@ -121,6 +122,7 @@ class QueryService:
             cost_tracker=cost_tracker,
             metadata_build_version=metadata_build_version,
             metadata_cache_version=metadata_cache_version,
+            semantic_reference_date=date.today(),
             user_id=user_id,
         )
         cache_namespace_token = set_llm_cache_context_namespace(

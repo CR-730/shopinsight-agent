@@ -1,0 +1,16 @@
+- id: intent_turnover_query
+  query: 统计成交额
+  suite: regression
+  difficulty: medium
+  capabilities: [semantic_planning, plan_consistency, sql_generation, tool_execution]
+  tags: [intent_guard, metric_alias, oracle]
+  risk_points: [入口误拦截, 指标同义表达绑定失败]
+  expected_semantic_plan:
+    measures: [{metric_id: GMV, output_alias: 成交额}]
+    required_table_ids: [fact_order]
+  expected_sql_plan_consistent: true
+  expected_result: {mode: non_empty}
+  oracle_sql: |
+    SELECT SUM(order_amount) AS 成交额
+    FROM fact_order
+  timeout_seconds: 300
