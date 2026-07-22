@@ -181,16 +181,43 @@ def test_phase_three_activates_new_orchestrator_without_writing_legacy_state():
     ) not in state_module.DataAgentState.__optional_keys__
 
 
-def test_history_is_trusted_only_for_explicit_short_followups():
-    history = "user: 按地区看销售额"
+def test_recent_user_history_is_trusted_for_all_followups_but_assistant_text_is_not():
+    messages = [
+        {"role": "user", "content": "按地区看销售额"},
+        {"role": "assistant", "content": "已查询华北地区"},
+    ]
 
-    assert orchestrator._trusted_sources("继续", conversation_history=history) == (
-        "继续",
-        history,
-    )
     assert orchestrator._trusted_sources(
-        "查询华东销售额", conversation_history=history
-    ) == ("查询华东销售额",)
+        "改成华南",
+        conversation_messages=messages,
+    ) == (
+        "改成华南",
+        "user: 按地区看销售额",
+    )
+
+
+def test_orchestrator_can_inherit_an_omitted_metric_from_recent_user_history(
+    monkeypatch,
+):
+    async def interpret(query, runtime, **kwargs):
+        return SemanticDraft(
+            measure_mentions=[MeasureMention(raw_text="销售额", candidate_ids=["GMV"])],
+        )
+
+    monkeypatch.setattr(
+        "app.agent.semantic_planning.orchestrator.interpret_semantics", interpret
+    )
+    state = _state()
+    state["query"] = "改成华南"
+    state["conversation_messages"] = [
+        {"role": "user", "content": "按地区看销售额"},
+        {"role": "assistant", "content": "已完成上一轮查询"},
+    ]
+
+    result = asyncio.run(build_semantic_plan(state, _runtime()))
+
+    assert result["failure"] is None
+    assert result["semantic_plan"]["measures"][0]["metric_id"] == "GMV"
 
 
 def test_production_node_streams_blocked_plan_without_legacy_state(monkeypatch):

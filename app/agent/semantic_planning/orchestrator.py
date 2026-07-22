@@ -55,8 +55,11 @@ async def build_semantic_plan(state, runtime) -> dict[str, Any]:
             metadata_version=metadata_version,
             policy=policy,
         )
-        conversation_history = sliding_conversation_history(
-            state.get("conversation_messages") or []
+        conversation_messages = state.get("conversation_messages") or []
+        conversation_history = sliding_conversation_history(conversation_messages)
+        trusted_sources = _trusted_sources(
+            query,
+            conversation_messages=conversation_messages,
         )
         draft = await interpret_semantics(
             query,
@@ -68,10 +71,7 @@ async def build_semantic_plan(state, runtime) -> dict[str, Any]:
             draft,
             SemanticResolutionContext(
                 catalog=catalog,
-                trusted_sources=_trusted_sources(
-                    query,
-                    conversation_history=conversation_history,
-                ),
+                trusted_sources=trusted_sources,
                 reference_date=reference_date,
                 temporal_column_id=temporal_column_id,
             ),
@@ -80,10 +80,7 @@ async def build_semantic_plan(state, runtime) -> dict[str, Any]:
             join_resolution = resolve_join_preferences(
                 draft.join_mentions,
                 catalog=catalog,
-                trusted_sources=_trusted_sources(
-                    query,
-                    conversation_history=conversation_history,
-                ),
+                trusted_sources=trusted_sources,
             )
             if join_resolution.status == "resolved":
                 result = validate_plan(
@@ -176,34 +173,15 @@ def _reference_date(value) -> date:
 def _trusted_sources(
     query: str,
     *,
-    conversation_history: str,
+    conversation_messages: list[dict[str, Any]],
 ) -> tuple[str, ...]:
-    if conversation_history and _allows_history_mentions(query):
-        return query, conversation_history
-    return (query,)
-
-
-def _allows_history_mentions(query: str) -> bool:
-    normalized = "".join(query.split()).strip("，。！？!?；;")
-    return normalized in {
-        "可以",
-        "可以的",
-        "好",
-        "好的",
-        "行",
-        "继续",
-        "继续吧",
-        "继续查",
-        "就这个",
-        "就查这个",
-        "就按这个查",
-        "按这个查",
-        "按这个来",
-        "是",
-        "是的",
-        "对",
-        "对的",
-    }
+    user_messages = [
+        message
+        for message in conversation_messages
+        if str(message.get("role") or "").casefold() == "user"
+    ]
+    user_history = sliding_conversation_history(user_messages)
+    return (query, user_history) if user_history else (query,)
 
 
 __all__ = ["build_semantic_plan"]

@@ -194,6 +194,8 @@ def test_prompt_contains_controlled_ids_but_no_backend_owned_output_fields(
     assert "比较发生的语义层级" in prompt_text
     assert "聚合或派生结果" in prompt_text
     assert "单条记录的原始属性" in prompt_text
+    assert "当前问题中的修改、替换、取消和新增要求优先于历史消息" in prompt_text
+    assert "历史消息只用于补全当前问题省略但仍然有效的信息" in prompt_text
     for overfit_example in (
         "销售额、订单数、客单价",
         "单笔、每条记录",
