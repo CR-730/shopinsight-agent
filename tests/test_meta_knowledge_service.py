@@ -2,8 +2,11 @@ from pathlib import Path
 
 import pytest
 
+import app.services.meta_knowledge_service as meta_knowledge_module
 from app.conf.meta_config import MetaConfig, MetricConfig
 from app.entities.metric_info import MetricInfo
+from app.entities.value_alias import ValueAlias
+from app.entities.value_info import ValueInfo, build_value_candidate_id
 from app.services.meta_knowledge_service import MetaKnowledgeService
 
 
@@ -54,6 +57,114 @@ class FakeValueRepository:
 
     async def index(self, value_infos):
         self.indexed.append(value_infos)
+
+
+def test_value_search_documents_share_one_candidate_id_across_surface_forms():
+    builder = getattr(
+        meta_knowledge_module,
+        "build_value_search_documents",
+        None,
+    )
+    assert callable(builder)
+
+    documents = builder(
+        [
+            ValueInfo(
+                id="value:region:north",
+                value="华北",
+                column_id="dim_region.region_name",
+            )
+        ],
+        [
+            ValueAlias(
+                column_id="dim_region.region_name",
+                alias="北方",
+                canonical_value="华北",
+            ),
+            ValueAlias(
+                column_id="dim_region.region_name",
+                alias="北方区域",
+                canonical_value="华北",
+            ),
+        ],
+    )
+
+    assert {document.matched_text for document in documents} == {
+        "华北",
+        "北方",
+        "北方区域",
+    }
+    assert {document.candidate_id for document in documents} == {
+        build_value_candidate_id("dim_region.region_name", "华北")
+    }
+    assert {document.value for document in documents} == {"华北"}
+    assert {document.column_id for document in documents} == {
+        "dim_region.region_name"
+    }
+
+
+def test_value_search_documents_reject_alias_without_real_canonical_value():
+    with pytest.raises(ValueError, match="value_alias_canonical_missing"):
+        meta_knowledge_module.build_value_search_documents(
+            [],
+            [
+                ValueAlias(
+                    column_id="dim_region.region_name",
+                    alias="北方区域",
+                    canonical_value="华北",
+                )
+            ],
+        )
+
+
+class FakeInvalidAliasDWRepository:
+    async def column_value_exists(self, table_name, column_name, value):
+        assert (table_name, column_name, value) == (
+            "dim_region",
+            "region_name",
+            "不存在的地区",
+        )
+        return False
+
+
+@pytest.mark.anyio
+async def test_invalid_value_alias_is_rejected_before_meta_clear(tmp_path):
+    config_path = tmp_path / "meta_config.yaml"
+    config_path.write_text(
+        """
+tables:
+  - name: dim_region
+    role: dim
+    description: 地区表
+    columns:
+      - name: region_name
+        role: dimension
+        description: 大区
+        alias: [地区]
+        sync: true
+metrics: []
+value_aliases:
+  - column: dim_region.region_name
+    aliases:
+      火星区域: 不存在的地区
+""".strip(),
+        encoding="utf-8",
+    )
+    meta_repository = FakeMetaRepository()
+    service = MetaKnowledgeService(
+        meta_mysql_repository=meta_repository,
+        dw_mysql_repository=FakeInvalidAliasDWRepository(),
+        column_qdrant_repository=FakeQdrantRepository(),
+        embedding_client=FakeEmbeddingClient(),
+        value_es_repository=FakeValueRepository(),
+        value_qdrant_repository=FakeQdrantRepository(),
+        metric_qdrant_repository=FakeQdrantRepository(),
+    )
+
+    with pytest.raises(ValueError, match="value_alias_canonical_missing"):
+        await service.build(config_path)
+
+    assert meta_repository.cleared is False
 
 
 @pytest.mark.anyio

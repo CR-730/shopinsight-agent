@@ -31,7 +31,11 @@ from app.entities.metric_info import MetricInfo
 from app.entities.table_info import TableInfo
 from app.entities.value_info import ValueInfo
 from app.prompt.prompt_loader import load_prompt
-from app.retrieval.fusion import fuse_ranked_value_infos
+from app.retrieval.fusion import (
+    RankedList,
+    fuse_candidate_rankings,
+    fuse_value_rankings,
+)
 
 
 async def recall_sql_memory_context(
@@ -102,8 +106,8 @@ async def recall_column_context(
         step=step,
         context=context,
     )
-    keywords = set(normalize_keyword_list(keywords) + result)
-    column_info_map: dict[str, ColumnInfo] = {}
+    keywords = sorted(set(normalize_keyword_list(keywords) + result))
+    ranked_lists: list[RankedList[ColumnInfo]] = []
     for keyword in keywords:
         embedding = await _embed_keyword(keyword, step, embedding_client, context)
         current_column_infos: list[ColumnInfo] = await ainvoke_with_timeout(
@@ -113,10 +117,14 @@ async def recall_column_context(
             ),
             app_config.agent.retrieval_timeout_seconds,
         )
-        for column_info in current_column_infos:
-            column_info_map.setdefault(column_info.id, column_info)
+        ranked_lists.append(RankedList(source="vector", items=current_column_infos))
 
-    return {"retrieved_column_infos": list(column_info_map.values())}
+    fused = fuse_candidate_rankings(
+        ranked_lists,
+        candidate_id_of=lambda item: item.id,
+        limit=20,
+    )
+    return {"retrieved_column_infos": [candidate.item for candidate in fused]}
 
 
 async def recall_metric_context(
@@ -134,8 +142,8 @@ async def recall_metric_context(
         step=step,
         context=context,
     )
-    keywords = set(normalize_keyword_list(keywords) + result)
-    metric_info_map: dict[str, MetricInfo] = {}
+    keywords = sorted(set(normalize_keyword_list(keywords) + result))
+    ranked_lists: list[RankedList[MetricInfo]] = []
     for keyword in keywords:
         embedding = await _embed_keyword(keyword, step, embedding_client, context)
         current_metric_infos: list[MetricInfo] = await ainvoke_with_timeout(
@@ -145,11 +153,16 @@ async def recall_metric_context(
             ),
             app_config.agent.retrieval_timeout_seconds,
         )
-        for metric_info in current_metric_infos:
-            metric_info_map.setdefault(metric_info.id, metric_info)
+        ranked_lists.append(RankedList(source="vector", items=current_metric_infos))
 
-    logger.info(f"检索到指标信息：{list(metric_info_map.keys())}")
-    return {"retrieved_metric_infos": list(metric_info_map.values())}
+    fused = fuse_candidate_rankings(
+        ranked_lists,
+        candidate_id_of=lambda item: item.id,
+        limit=20,
+    )
+    metric_infos = [candidate.item for candidate in fused]
+    logger.info(f"检索到指标信息：{[item.id for item in metric_infos]}")
+    return {"retrieved_metric_infos": metric_infos}
 
 
 async def recall_value_context(
@@ -171,8 +184,8 @@ async def recall_value_context(
         step=step,
         context=context,
     )
-    keywords = set(normalize_keyword_list(keywords) + result)
-    value_infos_map: dict[str, ValueInfo] = {}
+    keywords = sorted(set(normalize_keyword_list(keywords) + result))
+    ranked_lists: list[RankedList[ValueInfo]] = []
     for keyword in keywords:
         if _ablation_options(context).get("disable_value_es"):
             es_value_infos = []
@@ -200,18 +213,25 @@ async def recall_value_context(
                     _ablation_options(context),
                 ),
             )
-        current_value_infos = fuse_ranked_value_infos(
-            {"es": es_value_infos, "vector": vector_value_infos},
-            weights={
-                "es": app_config.agent.value_hybrid_es_weight,
-                "vector": app_config.agent.value_hybrid_vector_weight,
-            },
+        if es_value_infos:
+            ranked_lists.append(
+                RankedList(
+                    source="es",
+                    items=es_value_infos,
+                    weight=app_config.agent.value_hybrid_es_weight,
+                )
+            )
+        ranked_lists.append(
+            RankedList(
+                source="vector",
+                items=vector_value_infos,
+                weight=app_config.agent.value_hybrid_vector_weight,
+            )
         )
-        for current_value_info in current_value_infos:
-            value_infos_map.setdefault(current_value_info.id, current_value_info)
 
-    logger.info(f"检索到字段取值：{list(value_infos_map.keys())}")
-    return {"retrieved_value_infos": list(value_infos_map.values())}
+    value_infos = fuse_value_rankings(ranked_lists, limit=20)
+    logger.info(f"检索到字段取值：{[item.id for item in value_infos]}")
+    return {"retrieved_value_infos": value_infos}
 
 
 async def merge_retrieved_context(

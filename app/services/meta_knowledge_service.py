@@ -23,7 +23,11 @@ from app.entities.column_metric import ColumnMetric
 from app.entities.metric_info import MetricInfo
 from app.entities.table_info import TableInfo
 from app.entities.value_alias import ValueAlias
-from app.entities.value_info import ValueInfo
+from app.entities.value_info import (
+    ValueInfo,
+    ValueSearchDocument,
+    build_value_candidate_id,
+)
 from app.repositories.es.value_es_repository import ValueESRepository
 from app.repositories.mysql.dw.dw_mysql_repository import DWMySQLRepository
 from app.repositories.mysql.meta.meta_mysql_repository import MetaMySQLRepository
@@ -32,6 +36,83 @@ from app.repositories.qdrant.metric_qdrant_repository import MetricQdrantReposit
 from app.repositories.qdrant.value_qdrant_repository import ValueQdrantRepository
 from app.services.meta_point_id import build_meta_point_id
 from app.services.metric_definition_validator import validate_metric_definition
+
+
+def build_value_search_documents(
+    value_infos: list[ValueInfo],
+    value_aliases: list[ValueAlias],
+) -> list[ValueSearchDocument]:
+    """Expand canonical values and aliases into searchable surface documents."""
+
+    canonical_values = {
+        (value_info.column_id, value_info.value): build_value_candidate_id(
+            value_info.column_id,
+            value_info.value,
+        )
+        for value_info in value_infos
+    }
+    documents: dict[str, ValueSearchDocument] = {}
+
+    for value_info in value_infos:
+        candidate_id = canonical_values[(value_info.column_id, value_info.value)]
+        document = ValueSearchDocument(
+            id=str(
+                build_meta_point_id(
+                    "value",
+                    candidate_id,
+                    "canonical",
+                    value_info.value,
+                )
+            ),
+            candidate_id=candidate_id,
+            value=value_info.value,
+            column_id=value_info.column_id,
+            matched_text=value_info.value,
+            surface_type="canonical",
+        )
+        documents[document.id] = document
+
+    for value_alias in value_aliases:
+        candidate_id = canonical_values.get(
+            (value_alias.column_id, value_alias.canonical_value)
+        )
+        if candidate_id is None:
+            raise ValueError(
+                "value_alias_canonical_missing: "
+                f"{value_alias.column_id}={value_alias.canonical_value}"
+            )
+        if value_alias.alias == value_alias.canonical_value:
+            continue
+        document = ValueSearchDocument(
+            id=str(
+                build_meta_point_id(
+                    "value",
+                    candidate_id,
+                    "alias",
+                    value_alias.alias,
+                )
+            ),
+            candidate_id=candidate_id,
+            value=value_alias.canonical_value,
+            column_id=value_alias.column_id,
+            matched_text=value_alias.alias,
+            surface_type="alias",
+        )
+        documents[document.id] = document
+
+    return list(documents.values())
+
+
+def _configured_value_aliases(meta_config: MetaConfig) -> list[ValueAlias]:
+    return [
+        ValueAlias(
+            column_id=item.column,
+            alias=str(alias),
+            canonical_value=str(canonical_value),
+        )
+        for item in meta_config.value_aliases or []
+        for alias, canonical_value in item.aliases.items()
+    ]
 
 
 class MetaKnowledgeService:
@@ -109,16 +190,9 @@ class MetaKnowledgeService:
     def _save_value_aliases_to_meta_db(self, meta_config: MetaConfig):
         """Persist configured enum aliases into Meta MySQL."""
 
-        value_aliases = [
-            ValueAlias(
-                column_id=item.column,
-                alias=str(alias),
-                canonical_value=str(canonical_value),
-            )
-            for item in meta_config.value_aliases or []
-            for alias, canonical_value in item.aliases.items()
-        ]
-        self.meta_mysql_repository.save_value_aliases(value_aliases)
+        self.meta_mysql_repository.save_value_aliases(
+            _configured_value_aliases(meta_config)
+        )
 
     async def _save_column_info_to_qdrant(
         self, column_infos: list[ColumnInfo], build_version: str
@@ -212,7 +286,10 @@ class MetaKnowledgeService:
                 )
                 current_values_infos = [
                     ValueInfo(
-                        id=f"{column_info.id}.{current_column_value}",
+                        id=build_value_candidate_id(
+                            column_info.id,
+                            current_column_value,
+                        ),
                         value=current_column_value,
                         column_id=column_info.id,
                     )
@@ -223,29 +300,27 @@ class MetaKnowledgeService:
         return value_infos
 
     async def _save_value_info_to_es(
-        self, value_infos: list[ValueInfo], build_version: str
+        self, documents: list[ValueSearchDocument], build_version: str
     ):
         """把允许同步的字段真实取值写入 Elasticsearch 全文索引"""
         await self.value_es_repository.recreate_index()
         await self.value_es_repository.index(
-            value_infos, meta_build_version=build_version
+            documents, meta_build_version=build_version
         )
 
     async def _save_value_info_to_qdrant(
-        self, value_infos: list[ValueInfo], build_version: str
+        self, documents: list[ValueSearchDocument], build_version: str
     ):
         """把字段真实取值写入 Qdrant 向量索引。"""
 
         await self.value_qdrant_repository.recreate_collection()
         points = [
             {
-                "id": build_meta_point_id(
-                    "value", value_info.id, "value", value_info.value
-                ),
-                "embedding_text": value_info.value,
-                "payload": {**asdict(value_info), "meta_build_version": build_version},
+                "id": document.id,
+                "embedding_text": document.matched_text,
+                "payload": {**asdict(document), "meta_build_version": build_version},
             }
-            for value_info in value_infos
+            for document in documents
         ]
 
         embeddings: list[list[float]] = []
@@ -371,6 +446,7 @@ class MetaKnowledgeService:
         schema = OmegaConf.structured(MetaConfig)
         meta_config: MetaConfig = OmegaConf.to_object(OmegaConf.merge(schema, context))
 
+        await self._validate_configured_value_aliases(meta_config)
         await self.meta_mysql_repository.clear_all()
         logger.info("清空旧 Meta MySQL 元数据，准备重新构建")
 
@@ -384,8 +460,12 @@ class MetaKnowledgeService:
             logger.info("为字段信息建立向量索引")
             # 对指定的维度字段取值建立全文索引和向量索引
             value_infos = await self._build_value_infos(meta_config, column_infos)
-            await self._save_value_info_to_es(value_infos, build_version)
-            await self._save_value_info_to_qdrant(value_infos, build_version)
+            value_documents = build_value_search_documents(
+                value_infos,
+                _configured_value_aliases(meta_config),
+            )
+            await self._save_value_info_to_es(value_documents, build_version)
+            await self._save_value_info_to_qdrant(value_documents, build_version)
             logger.info("为字段取值建立全文索引和向量索引")
         else:
             await self.column_qdrant_repository.recreate_collection()
@@ -409,6 +489,35 @@ class MetaKnowledgeService:
         await self.meta_mysql_repository.save_build_version(build_version, config_path)
         clear_llm_response_cache()
         logger.info(f"记录元数据构建版本：{build_version}")
+
+    async def _validate_configured_value_aliases(self, meta_config: MetaConfig):
+        """Validate alias targets against configured retrievable DW columns."""
+
+        configured_columns = {
+            f"{table.name}.{column.name}": column.sync
+            for table in meta_config.tables or []
+            for column in table.columns
+        }
+        checked_targets: set[tuple[str, str]] = set()
+        for value_alias in _configured_value_aliases(meta_config):
+            if not configured_columns.get(value_alias.column_id, False):
+                raise ValueError(
+                    f"value_alias_column_not_retrievable: {value_alias.column_id}"
+                )
+            target = (value_alias.column_id, value_alias.canonical_value)
+            if target in checked_targets:
+                continue
+            checked_targets.add(target)
+            table_name, column_name = value_alias.column_id.rsplit(".", 1)
+            if not await self.dw_mysql_repository.column_value_exists(
+                table_name,
+                column_name,
+                value_alias.canonical_value,
+            ):
+                raise ValueError(
+                    "value_alias_canonical_missing: "
+                    f"{value_alias.column_id}={value_alias.canonical_value}"
+                )
 
     @staticmethod
     def _build_version(config_path: Path) -> str:

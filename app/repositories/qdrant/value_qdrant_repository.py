@@ -1,21 +1,18 @@
 """字段取值向量仓储。"""
 
-from dataclasses import fields
-
 from qdrant_client import AsyncQdrantClient
 from qdrant_client.models import (
     Distance,
-    FieldCondition,
-    Filter,
-    MatchValue,
     PointStruct,
     VectorParams,
 )
 
 from app.conf.app_config import app_config
 from app.entities.value_info import ValueInfo
-
-_VALUE_INFO_FIELDS = {field.name for field in fields(ValueInfo)}
+from app.repositories.qdrant.grouped_search import (
+    ensure_grouped_payload_indexes,
+    query_grouped_points,
+)
 
 
 class ValueQdrantRepository:
@@ -35,6 +32,11 @@ class ValueQdrantRepository:
                     distance=Distance.COSINE,
                 ),
             )
+        await ensure_grouped_payload_indexes(
+            self.client,
+            collection_name=self.collection_name,
+            group_by="candidate_id",
+        )
 
     async def recreate_collection(self):
         if await self.client.collection_exists(self.collection_name):
@@ -65,33 +67,35 @@ class ValueQdrantRepository:
         limit: int = 20,
         meta_build_version: str | None = None,
     ) -> list[ValueInfo]:
-        result = await self.client.query_points(
+        result = await query_grouped_points(
+            self.client,
             collection_name=self.collection_name,
-            query=embedding,
+            embedding=embedding,
+            group_by="candidate_id",
+            group_size=3,
             limit=limit,
             score_threshold=score_threshold,
-            query_filter=_meta_build_filter(meta_build_version),
+            meta_build_version=meta_build_version,
         )
-        return [
-            ValueInfo(
-                **{
-                    key: value
-                    for key, value in point.payload.items()
-                    if key in _VALUE_INFO_FIELDS
-                }
+        candidates = []
+        for group in result.groups:
+            hits = list(group.hits or [])
+            if not hits:
+                continue
+            payload = hits[0].payload or {}
+            matched_texts = list(
+                dict.fromkeys(
+                    str(hit.payload.get("matched_text") or "")
+                    for hit in hits
+                    if hit.payload and hit.payload.get("matched_text")
+                )
             )
-            for point in result.points
-        ]
-
-
-def _meta_build_filter(meta_build_version: str | None) -> Filter | None:
-    if not meta_build_version:
-        return None
-    return Filter(
-        must=[
-            FieldCondition(
-                key="meta_build_version",
-                match=MatchValue(value=meta_build_version),
+            candidates.append(
+                ValueInfo(
+                    id=str(payload["candidate_id"]),
+                    value=str(payload["value"]),
+                    column_id=str(payload["column_id"]),
+                    matched_texts=matched_texts,
+                )
             )
-        ]
-    )
+        return candidates

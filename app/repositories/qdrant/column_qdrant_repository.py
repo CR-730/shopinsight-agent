@@ -13,14 +13,15 @@ from qdrant_client import AsyncQdrantClient
 from qdrant_client.http.models import PointStruct
 from qdrant_client.models import (
     Distance,
-    FieldCondition,
-    Filter,
-    MatchValue,
     VectorParams,
 )
 
 from app.conf.app_config import app_config
 from app.entities.column_info import ColumnInfo
+from app.repositories.qdrant.grouped_search import (
+    ensure_grouped_payload_indexes,
+    query_grouped_points,
+)
 
 _COLUMN_INFO_FIELDS = {field.name for field in fields(ColumnInfo)}
 
@@ -42,6 +43,11 @@ class ColumnQdrantRepository:
                     size=app_config.qdrant.embedding_size, distance=Distance.COSINE
                 ),
             )
+        await ensure_grouped_payload_indexes(
+            self.client,
+            collection_name=self.collection_name,
+            group_by="id",
+        )
 
     async def recreate_collection(self):
         """重建字段向量集合，避免删除或改名后的旧 point 残留。"""
@@ -75,12 +81,15 @@ class ColumnQdrantRepository:
         meta_build_version: str | None = None,
     ) -> list[ColumnInfo]:
         """按向量相似度检索字段元数据，并还原为 ColumnInfo 实体"""
-        result = await self.client.query_points(
+        result = await query_grouped_points(
+            self.client,
             collection_name=self.collection_name,
-            query=embedding,
+            embedding=embedding,
+            group_by="id",
+            group_size=1,
             limit=limit,
             score_threshold=score_threshold,
-            query_filter=_meta_build_filter(meta_build_version),
+            meta_build_version=meta_build_version,
         )
         # Qdrant 只保存字段元数据 payload，业务层继续使用 ColumnInfo
         return [
@@ -91,18 +100,6 @@ class ColumnQdrantRepository:
                     if key in _COLUMN_INFO_FIELDS
                 }
             )
-            for point in result.points
+            for group in result.groups
+            for point in list(group.hits or [])[:1]
         ]
-
-
-def _meta_build_filter(meta_build_version: str | None) -> Filter | None:
-    if not meta_build_version:
-        return None
-    return Filter(
-        must=[
-            FieldCondition(
-                key="meta_build_version",
-                match=MatchValue(value=meta_build_version),
-            )
-        ]
-    )

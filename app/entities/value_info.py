@@ -5,7 +5,9 @@
 一致的业务层表达方式
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from hashlib import sha256
+from typing import Literal
 
 
 @dataclass
@@ -15,3 +17,30 @@ class ValueInfo:
     id: str
     value: str
     column_id: str
+    matched_texts: list[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class ValueSearchDocument:
+    """One searchable surface form pointing to one canonical value candidate."""
+
+    id: str
+    candidate_id: str
+    value: str
+    column_id: str
+    matched_text: str
+    surface_type: Literal["canonical", "alias"]
+
+
+def build_value_candidate_id(column_id: str, canonical_value: str) -> str:
+    """Build the stable business ID shared by all surface-form documents."""
+
+    digest = sha256(f"{column_id}\0{canonical_value}".encode()).hexdigest()
+    return f"value:{column_id}:{digest}"
+
+
+__all__ = [
+    "ValueInfo",
+    "ValueSearchDocument",
+    "build_value_candidate_id",
+]

@@ -11,7 +11,7 @@ from dataclasses import asdict
 
 from elasticsearch import AsyncElasticsearch
 
-from app.entities.value_info import ValueInfo
+from app.entities.value_info import ValueInfo, ValueSearchDocument
 
 
 class ValueESRepository:
@@ -23,12 +23,15 @@ class ValueESRepository:
         "dynamic": False,
         "properties": {
             "id": {"type": "keyword"},
-            "value": {
+            "candidate_id": {"type": "keyword"},
+            "value": {"type": "keyword"},
+            "matched_text": {
                 "type": "text",
                 "analyzer": "ik_max_word",
                 "search_analyzer": "ik_max_word",
             },
             "column_id": {"type": "keyword"},
+            "surface_type": {"type": "keyword"},
             "meta_build_version": {"type": "keyword"},
         },
     }
@@ -52,7 +55,7 @@ class ValueESRepository:
 
     async def index(
         self,
-        value_infos: list[ValueInfo],
+        value_infos: list[ValueSearchDocument],
         batch_size=20,
         meta_build_version: str | None = None,
     ):
@@ -87,24 +90,24 @@ class ValueESRepository:
             # value 字段启用了 IK 分词，match 查询可以处理中文短语和枚举值匹配
             query=_value_query(keyword, meta_build_version),
             size=limit,
+            collapse={"field": "candidate_id"},
             # 过滤掉相关度过低的命中，避免把明显无关的取值带入后续上下文
             min_score=score_threshold,
         )
         # ES 文档 _source 中保存的是 ValueInfo 的字段结构，业务层继续使用实体对象
         return [
             ValueInfo(
-                **{
-                    key: value
-                    for key, value in hit["_source"].items()
-                    if key in {"id", "value", "column_id"}
-                }
+                id=str(hit["_source"]["candidate_id"]),
+                value=str(hit["_source"]["value"]),
+                column_id=str(hit["_source"]["column_id"]),
+                matched_texts=[str(hit["_source"]["matched_text"])],
             )
             for hit in resp["hits"]["hits"]
         ]
 
 
 def _value_query(keyword: str, meta_build_version: str | None) -> dict:
-    match_query = {"match": {"value": keyword}}
+    match_query = {"match": {"matched_text": keyword}}
     if not meta_build_version:
         return match_query
     return {
