@@ -142,8 +142,6 @@ def test_predicates_are_discriminated_and_json_serializable():
                 "operator": "between",
                 "start_date": "2025-01-01",
                 "end_date": "2025-03-31",
-                "start_date_id": 20250101,
-                "end_date_id": 20250331,
                 "grain": "quarter",
             },
         ]
@@ -225,8 +223,6 @@ def test_enum_predicate_uses_only_plural_canonical_values():
                 "operator": "between",
                 "start_date": "2025-01-01",
                 "end_date": "2025-03-31",
-                "start_date_id": 20250101,
-                "end_date_id": 20250331,
                 "grain": "quarter",
                 "unexpected": True,
             },

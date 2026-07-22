@@ -21,6 +21,7 @@ from app.agent.semantic_planning.plan import (
     SemanticQueryPlan,
     TemporalPredicate,
 )
+from app.agent.sql.plan_projection import date_id_from_iso
 
 
 @dataclass(frozen=True)
@@ -538,8 +539,8 @@ def _expected_predicate(predicate, plan):
             tuple(_number(value) for value in predicate.values),
         )
     assert isinstance(predicate, TemporalPredicate)
-    start = predicate.start_date_id or predicate.start_date
-    end = predicate.end_date_id or predicate.end_date
+    start = date_id_from_iso(predicate.start_date)
+    end = date_id_from_iso(predicate.end_date)
     operator = predicate.operator
     if operator in {"during", "between"}:
         sql_operator, values = "between", (str(start), str(end))

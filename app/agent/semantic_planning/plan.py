@@ -64,8 +64,6 @@ class TemporalPredicate(_StrictPlanModel):
     operator: Literal["on", "between", "before", "after", "since", "until", "during"]
     start_date: str | None = None
     end_date: str | None = None
-    start_date_id: int | None = None
-    end_date_id: int | None = None
     grain: Literal["day", "week", "month", "quarter", "year"]
 
 

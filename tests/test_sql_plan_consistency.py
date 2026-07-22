@@ -47,8 +47,6 @@ def _plan():
                 "operator": "during",
                 "start_date": "2025-01-01",
                 "end_date": "2025-03-31",
-                "start_date_id": 20250101,
-                "end_date_id": 20250331,
                 "grain": "quarter",
             },
             {

@@ -1,5 +1,6 @@
 """Project a trusted semantic plan into an unambiguous SQL compiler input."""
 
+from datetime import date
 from typing import Any
 
 from app.agent.semantic_planning.plan import SemanticQueryPlan
@@ -19,11 +20,15 @@ def project_plan_for_sql(
     for predicate in payload["predicates"]:
         if predicate["kind"] != "temporal":
             continue
-        if predicate.get("start_date_id") is not None:
-            predicate.pop("start_date", None)
-        if predicate.get("end_date_id") is not None:
-            predicate.pop("end_date", None)
+        predicate["start_date_id"] = date_id_from_iso(predicate.pop("start_date"))
+        predicate["end_date_id"] = date_id_from_iso(predicate.pop("end_date"))
     return payload
 
 
-__all__ = ["project_plan_for_sql"]
+def date_id_from_iso(value: str | None) -> int | None:
+    if value is None:
+        return None
+    return int(date.fromisoformat(value).strftime("%Y%m%d"))
+
+
+__all__ = ["date_id_from_iso", "project_plan_for_sql"]

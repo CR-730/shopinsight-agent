@@ -73,7 +73,7 @@ def test_quarter_and_relative_month_use_explicit_reference_date():
     )
 
 
-def test_temporal_resolution_materializes_closed_dates_and_date_ids():
+def test_temporal_resolution_materializes_only_canonical_closed_dates():
     result = _resolve()
 
     assert result.status == "resolved"
@@ -81,8 +81,8 @@ def test_temporal_resolution_materializes_closed_dates_and_date_ids():
     assert result.plan.operator == "during"
     assert result.plan.start_date == "2025-01-01"
     assert result.plan.end_date == "2025-03-31"
-    assert result.plan.start_date_id == 20250101
-    assert result.plan.end_date_id == 20250331
+    assert "start_date_id" not in type(result.plan).model_fields
+    assert "end_date_id" not in type(result.plan).model_fields
     assert result.plan.grain == "quarter"
 
 

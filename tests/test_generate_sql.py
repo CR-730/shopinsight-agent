@@ -176,8 +176,6 @@ def test_generate_sql_exposes_only_the_selected_physical_time_literals(monkeypat
             "operator": "during",
             "start_date": "2025-01-01",
             "end_date": "2025-03-31",
-            "start_date_id": 20250101,
-            "end_date_id": 20250331,
             "grain": "quarter",
         }
     )
@@ -190,6 +188,8 @@ def test_generate_sql_exposes_only_the_selected_physical_time_literals(monkeypat
     assert "start_date" not in temporal
     assert "end_date" not in temporal
     assert state["semantic_plan"]["predicates"][-1]["start_date"] == "2025-01-01"
+    assert "start_date_id" not in state["semantic_plan"]["predicates"][-1]
+    assert "end_date_id" not in state["semantic_plan"]["predicates"][-1]
 
 
 def test_generate_sql_fails_closed_without_semantic_plan(monkeypatch):

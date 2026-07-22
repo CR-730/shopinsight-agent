@@ -300,10 +300,6 @@ def _validate_temporal(predicate, catalog, required_columns, issues) -> None:
         return
     if start > end:
         issues.append(_issue("temporal_boundary_reversed", [predicate.column_id]))
-    if predicate.start_date_id != int(start.strftime("%Y%m%d")) or (
-        predicate.end_date_id != int(end.strftime("%Y%m%d"))
-    ):
-        issues.append(_issue("temporal_date_id_mismatch", [predicate.column_id]))
     required_columns.add(predicate.column_id)
 
 

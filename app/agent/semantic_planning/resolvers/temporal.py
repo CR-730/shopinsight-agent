@@ -82,8 +82,6 @@ def resolve_temporal_predicate(
             operator=mention.relation_intent,
             start_date=parsed.start_date.isoformat(),
             end_date=parsed.end_date.isoformat(),
-            start_date_id=int(parsed.start_date.strftime("%Y%m%d")),
-            end_date_id=int(parsed.end_date.strftime("%Y%m%d")),
             grain=parsed.grain,
         ),
     )
