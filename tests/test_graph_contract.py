@@ -28,10 +28,10 @@ def test_graph_exposes_semantic_planning_node():
     }
 
     assert ("context_builder", "semantic_planning", None, False) in edges
-    assert ("semantic_planning", "context_compaction", "continue", True) in edges
+    assert ("semantic_planning", "generate_sql", "continue", True) in edges
     assert ("semantic_planning", "__end__", "blocked", True) in edges
-    assert ("context_compaction", "generate_sql", "continue", True) in edges
-    assert ("context_compaction", "__end__", "blocked", True) in edges
+    assert not any(edge[0] == "context_compaction" for edge in edges)
+    assert not any(edge[1] == "context_compaction" for edge in edges)
 
 
 def test_graph_exposes_single_sql_executor_node():

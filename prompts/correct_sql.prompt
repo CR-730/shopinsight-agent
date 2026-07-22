@@ -5,9 +5,6 @@
 下方查询规范是本次修正唯一可信的业务语义来源：
 {semantic_plan}
 
-可用表和字段的权威结构如下：
-{table_infos}
-
 待修复 SQL：
 {sql}
 
@@ -18,12 +15,14 @@
 1. 只修复 differences 指出的错误，并进行使 SQL 可执行所必需的最小改动。
 2. 修复后的 SQL 必须逐项、完整且仅实现 semantic_plan 中的 measures、dimensions、predicates、joins、order_by 和 limit。
 3. 不得新增、删除、替换或重新解释 semantic_plan 中的任何指标、维度、筛选条件、时间边界、连接关系、排序方向或 Limit。
-4. 只能使用 table_infos 中真实存在的表和字段；指标聚合及表达式必须与 semantic_plan 完全一致。
+4. 只能使用 semantic_plan 的 required_table_ids、required_column_ids 和指标表达式涉及的对象。
 5. 不得从原用户问题、历史消息或待修复 SQL 中推导 semantic_plan 之外的新业务条件。
 6. 只能生成一条只读 SELECT；禁止 SELECT *，禁止 INSERT、UPDATE、DELETE、DDL、多语句和 Markdown 代码块。
 7. 聚合或计算结果必须保留 semantic_plan 指定的 output_alias。
 8. 如果原 SQL 与 semantic_plan 冲突，以 semantic_plan 为准。
-9. joins 必须逐条遵守 join_type：inner 使用 INNER JOIN；left 使用 LEFT JOIN，left_column_id 所属表必须位于 LEFT JOIN 的保留侧。不得交换保留方向，也不得改成 RIGHT、FULL 或 CROSS JOIN。
+9. required_columns 中的 data_type 是权威物理类型。标识符和谓词字面量必须与对应类型兼容，并原样使用计划给出的物理值；不得改写、格式化或单位转换。
+10. joins 必须逐条遵守 join_type：inner 使用 INNER JOIN；left 使用 LEFT JOIN，left_column_id 所属表必须位于 LEFT JOIN 的保留侧。不得交换保留方向，也不得改成 RIGHT、FULL 或 CROSS JOIN。
+11. 谓词位置：clause=having 的聚合谓词放入 HAVING；所有行级谓词默认放入 WHERE。若谓词目标字段属于 LEFT JOIN 的被连接侧，则必须放入引入该表的 JOIN ON，以保留左侧未匹配记录；外连接的保行语义优先于默认子句位置。
 
 【输出】
 只输出修复后的一条完整 SQL 纯文本，不要解释。

@@ -83,18 +83,58 @@ def repair_invalid_join_relationship(
     state: dict[str, Any],
     sql: str,
 ) -> str | None:
-    """Repair a join predicate when metadata has one unambiguous FK->PK candidate."""
+    """Repair a join predicate when the trusted plan has one matching edge."""
 
     parsed_sql = _parse_single_select(sql.strip())
     if isinstance(parsed_sql, str):
+        return None
+
+    alias_to_table = _table_aliases(parsed_sql)
+    table_refs = _preferred_table_refs(alias_to_table)
+    planned_joins = _planned_joins(state)
+    if planned_joins is not None:
+        for join in parsed_sql.find_all(exp.Join):
+            condition = join.args.get("on")
+            if condition is None:
+                continue
+            for predicate in condition.find_all(exp.EQ):
+                if not isinstance(predicate.left, exp.Column) or not isinstance(
+                    predicate.right, exp.Column
+                ):
+                    continue
+                left_id = _resolved_column_id(predicate.left, alias_to_table)
+                right_id = _resolved_column_id(predicate.right, alias_to_table)
+                if left_id is None or right_id is None:
+                    continue
+                if _is_planned_join(left_id, right_id, planned_joins):
+                    continue
+                candidate = _planned_join_for_tables(left_id, right_id, planned_joins)
+                if candidate is None:
+                    continue
+                left_expected, right_expected = candidate
+                left_table, left_name = left_expected.rsplit(".", 1)
+                right_table, right_name = right_expected.rsplit(".", 1)
+                predicate.set(
+                    "this",
+                    exp.column(
+                        left_name,
+                        table=table_refs.get(left_table, left_table),
+                    ),
+                )
+                predicate.set(
+                    "expression",
+                    exp.column(
+                        right_name,
+                        table=table_refs.get(right_table, right_table),
+                    ),
+                )
+                return parsed_sql.sql(dialect="mysql")
         return None
 
     column_catalog = _column_catalog(state)
     if not column_catalog:
         return None
 
-    alias_to_table = _table_aliases(parsed_sql)
-    table_refs = _preferred_table_refs(alias_to_table)
     for join in parsed_sql.find_all(exp.Join):
         condition = join.args.get("on")
         if condition is None:
@@ -152,11 +192,35 @@ def _invalid_join_relationship(
     state: dict[str, Any],
     expression: exp.Expression,
 ) -> str | None:
+    alias_to_table = _table_aliases(expression)
+    planned_joins = _planned_joins(state)
+    if planned_joins is not None:
+        for join in expression.find_all(exp.Join):
+            condition = join.args.get("on")
+            if condition is None:
+                continue
+            for predicate in condition.find_all(exp.EQ):
+                if not isinstance(predicate.left, exp.Column) or not isinstance(
+                    predicate.right, exp.Column
+                ):
+                    continue
+                left_id = _resolved_column_id(predicate.left, alias_to_table)
+                right_id = _resolved_column_id(predicate.right, alias_to_table)
+                if left_id is None or right_id is None or left_id == right_id:
+                    continue
+                if _is_planned_join(left_id, right_id, planned_joins):
+                    continue
+                candidate = _planned_join_for_tables(left_id, right_id, planned_joins)
+                message = f"JOIN 条件不符合查询计划：{left_id} = {right_id}。"
+                if candidate:
+                    message += f"计划关系：{candidate[0]} = {candidate[1]}。"
+                return message
+        return None
+
     column_catalog = _column_catalog(state)
     if not column_catalog:
         return None
 
-    alias_to_table = _table_aliases(expression)
     for join in expression.find_all(exp.Join):
         condition = join.args.get("on")
         if condition is None:
@@ -179,6 +243,62 @@ def _invalid_join_relationship(
                 message += f"候选正确关系：{candidate}。"
             return message
     return None
+
+
+def _planned_joins(
+    state: dict[str, Any],
+) -> list[tuple[str, str]] | None:
+    raw_plan = state.get("semantic_plan")
+    if not raw_plan:
+        return None
+    try:
+        plan = SemanticQueryPlan.model_validate(raw_plan)
+    except ValueError:
+        return []
+    return [
+        (join.left_column_id.casefold(), join.right_column_id.casefold())
+        for join in plan.joins
+    ]
+
+
+def _resolved_column_id(
+    column: exp.Column,
+    alias_to_table: dict[str, str],
+) -> str | None:
+    if not column.table:
+        return None
+    table = alias_to_table.get(column.table, column.table)
+    return f"{table}.{column.name}".casefold()
+
+
+def _is_planned_join(
+    left_id: str,
+    right_id: str,
+    planned_joins: list[tuple[str, str]],
+) -> bool:
+    pair = frozenset((left_id.casefold(), right_id.casefold()))
+    return any(frozenset(candidate) == pair for candidate in planned_joins)
+
+
+def _planned_join_for_tables(
+    left_id: str,
+    right_id: str,
+    planned_joins: list[tuple[str, str]],
+) -> tuple[str, str] | None:
+    tables = {
+        left_id.rsplit(".", 1)[0].casefold(),
+        right_id.rsplit(".", 1)[0].casefold(),
+    }
+    matches = [
+        candidate
+        for candidate in planned_joins
+        if {
+            candidate[0].rsplit(".", 1)[0],
+            candidate[1].rsplit(".", 1)[0],
+        }
+        == tables
+    ]
+    return matches[0] if len(matches) == 1 else None
 
 
 def _table_aliases(expression: exp.Expression) -> dict[str, str]:
@@ -321,7 +441,9 @@ def _sensitive_column(expression: exp.Expression) -> str | None:
     for column in expression.find_all(exp.Column):
         if _is_allowed_sensitive_join_key(column, allowed_join_key_names):
             continue
-        sensitive = _sensitive_column_name(column, sensitive_column_ids, sensitive_names)
+        sensitive = _sensitive_column_name(
+            column, sensitive_column_ids, sensitive_names
+        )
         if sensitive:
             return sensitive
     return None
@@ -385,7 +507,7 @@ def _known_literal_values(state: dict[str, Any]) -> set[str]:
         literal
         for predicate in plan.predicates
         if isinstance(predicate, EnumPredicate)
-        for literal in predicate.allowed_sql_literals
+        for literal in predicate.canonical_values
     }
 
 

@@ -41,6 +41,9 @@ def _semantic_plan():
         "joins": [],
         "required_table_ids": ["fact_order"],
         "required_column_ids": ["fact_order.order_amount"],
+        "required_columns": [
+            {"column_id": "fact_order.order_amount", "data_type": "decimal"}
+        ],
         "provenance": [
             {
                 "raw_text": "销售额",

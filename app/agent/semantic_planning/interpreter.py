@@ -59,7 +59,6 @@ async def interpret_semantics(
             if isinstance(raw_draft, SemanticDraft)
             else SemanticDraft.model_validate(_sanitize_draft_payload(raw_draft))
         )
-        draft = draft.model_copy(update={"source_query": query})
         return _drop_temporal_filter_dimensions(draft, query)
     except Exception as exc:
         logger.warning(f"语义理解结构化输出失败，保留显式证据并阻断执行: {exc}")
@@ -121,7 +120,6 @@ def fallback_semantic_draft(
         for raw_text, candidate_ids in column_matches
     )
     return SemanticDraft(
-        source_query=query,
         measure_mentions=[
             MeasureMention(raw_text=raw_text, candidate_ids=candidate_ids)
             for raw_text, candidate_ids in metric_matches
@@ -193,7 +191,6 @@ def _sanitize_draft_payload(payload: Any) -> dict[str, Any]:
 
     value = dict(payload or {})
     return {
-        "source_query": value.get("source_query") or "",
         "measure_mentions": _allowlist_items(
             value.get("measure_mentions"), {"raw_text", "candidate_ids"}
         ),

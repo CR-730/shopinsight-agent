@@ -99,9 +99,6 @@ def ablation_specs() -> list[AblationRunSpec]:
             ablation_options={
                 "disable_non_sql_llm_cache": True,
                 "disable_embedding_cache": True,
-                # This disables pruning only: Meta authority checks, required/JOIN
-                # enrichment, and runtime date/database context remain enabled.
-                "disable_context_compaction": True,
             },
         ),
         AblationRunSpec(
@@ -144,7 +141,9 @@ def selected_ablation_specs(
     if variant:
         specs = [spec for spec in specs if spec.variant == variant]
     if not specs:
-        raise ValueError(f"no ablation specs matched phase={phase!r}, variant={variant!r}")
+        raise ValueError(
+            f"no ablation specs matched phase={phase!r}, variant={variant!r}"
+        )
     return specs
 
 
@@ -228,7 +227,9 @@ async def run_ablation_eval(
         if output_path:
             output_path.parent.mkdir(parents=True, exist_ok=True)
             output_path.write_text(
-                json.dumps(payload, ensure_ascii=False, indent=2, default=_json_default),
+                json.dumps(
+                    payload, ensure_ascii=False, indent=2, default=_json_default
+                ),
                 encoding="utf-8",
             )
         print(json.dumps(payload, ensure_ascii=False, indent=2, default=_json_default))
@@ -246,12 +247,18 @@ def _build_repositories(meta_session, dw_session) -> dict[str, Any]:
         embedding_client_manager.client,
     )
     return {
-        "column_qdrant_repository": ColumnQdrantRepository(qdrant_client_manager.client),
-        "metric_qdrant_repository": MetricQdrantRepository(qdrant_client_manager.client),
+        "column_qdrant_repository": ColumnQdrantRepository(
+            qdrant_client_manager.client
+        ),
+        "metric_qdrant_repository": MetricQdrantRepository(
+            qdrant_client_manager.client
+        ),
         "value_es_repository": ValueESRepository(es_client_manager.client),
         "value_qdrant_repository": ValueQdrantRepository(qdrant_client_manager.client),
         "meta_mysql_repository": MetaMySQLRepository(meta_session),
-        "agent_memory_repository": AgentMemoryRepository(meta_session, agent_memory_store),
+        "agent_memory_repository": AgentMemoryRepository(
+            meta_session, agent_memory_store
+        ),
         "dw_mysql_repository": DWMySQLRepository(dw_session),
     }
 
@@ -287,7 +294,9 @@ async def _run_graph_case(
     cache_namespace_token = set_llm_cache_context_namespace(
         f"metadata:{metadata_cache_version}"
     )
-    call_budget_token = set_llm_request_call_budget(app_config.llm.max_calls_per_request)
+    call_budget_token = set_llm_request_call_budget(
+        app_config.llm.max_calls_per_request
+    )
     try:
         final_state = await asyncio.wait_for(
             graph.ainvoke(input=state, context=context),
@@ -387,9 +396,7 @@ def _summarize_group(items: list[dict[str, Any]]) -> dict[str, Any]:
     total = len(items)
     passed = sum(1 for item in items if item.get("passed"))
     failures = Counter(
-        item.get("failure_stage") or "none"
-        for item in items
-        if not item.get("passed")
+        item.get("failure_stage") or "none" for item in items if not item.get("passed")
     )
     usage_items = [item["usage"] for item in items]
     sql_memory_hits = sum(1 for item in items if item.get("sql_memory_hit"))
@@ -503,7 +510,12 @@ def _exception_state(case: EvalCase, stage: str, error: str) -> dict[str, Any]:
         "sql": "",
         "sql_context": {"tables": [], "metrics": []},
         "retrieval_context": {"columns": [], "metrics": [], "values": []},
-        "trace": {"keywords": [], "retrieved_columns": [], "retrieved_metrics": [], "retrieved_values": []},
+        "trace": {
+            "keywords": [],
+            "retrieved_columns": [],
+            "retrieved_metrics": [],
+            "retrieved_values": [],
+        },
     }
 
 
@@ -531,7 +543,9 @@ def _git_commit() -> str | None:
 def _json_default(value: Any) -> Any:
     if isinstance(value, Decimal):
         return float(value)
-    raise TypeError(f"Object of type {value.__class__.__name__} is not JSON serializable")
+    raise TypeError(
+        f"Object of type {value.__class__.__name__} is not JSON serializable"
+    )
 
 
 if __name__ == "__main__":
@@ -553,8 +567,12 @@ if __name__ == "__main__":
         default=None,
         help="每个阶段/变体只跑前 N 条，用于快速检查报告结构",
     )
-    parser.add_argument("--phase", default=None, help="只运行指定阶段，例如 cost/guard/retrieval/seed")
-    parser.add_argument("--variant", default=None, help="只运行指定变体，例如 optimized/retrieval_full")
+    parser.add_argument(
+        "--phase", default=None, help="只运行指定阶段，例如 cost/guard/retrieval/seed"
+    )
+    parser.add_argument(
+        "--variant", default=None, help="只运行指定变体，例如 optimized/retrieval_full"
+    )
     parser.add_argument(
         "--seed-user-id",
         default=None,

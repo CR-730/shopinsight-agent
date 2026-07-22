@@ -120,10 +120,10 @@ def test_interpreter_uses_one_llm_call_and_returns_untrusted_draft(monkeypatch):
 
     async def fake_invoke(*args, **kwargs):
         calls.append((args, kwargs))
-        return SemanticDraft(
-            source_query="model supplied value",
-            measure_mentions=[{"raw_text": "销售额", "candidate_ids": ["GMV"]}],
-        )
+        return {
+            "source_query": "model supplied value",
+            "measure_mentions": [{"raw_text": "销售额", "candidate_ids": ["GMV"]}],
+        }
 
     monkeypatch.setattr(interpreter, "ainvoke_llm_with_usage", fake_invoke)
 
@@ -137,7 +137,7 @@ def test_interpreter_uses_one_llm_call_and_returns_untrusted_draft(monkeypatch):
     )
 
     assert len(calls) == 1
-    assert result.source_query == "统计销售额"
+    assert not hasattr(result, "source_query")
     assert result.measure_mentions[0].candidate_ids == ["GMV"]
 
 
@@ -169,7 +169,9 @@ def test_prompt_contains_controlled_ids_but_no_backend_owned_output_fields(
 
     async def fake_invoke(prompt, _llm, _parser, inputs, *_args, **_kwargs):
         captured["text"] = (await prompt.ainvoke(inputs)).to_string()
-        return SemanticDraft(source_query="统计华南销售额")
+        captured["model"] = _parser.pydantic_object
+        captured["schema"] = _parser.pydantic_object.model_json_schema()
+        return {}
 
     monkeypatch.setattr(interpreter, "ainvoke_llm_with_usage", fake_invoke)
     asyncio.run(
@@ -189,6 +191,20 @@ def test_prompt_contains_controlled_ids_but_no_backend_owned_output_fields(
     assert '"left_column_id": "dim_region.region_id"' in prompt_text
     assert '"right_column_id": "fact_order.region_id"' in prompt_text
     assert "没有对应取值候选" in prompt_text
+    assert "比较发生的语义层级" in prompt_text
+    assert "聚合或派生结果" in prompt_text
+    assert "单条记录的原始属性" in prompt_text
+    for overfit_example in (
+        "销售额、订单数、客单价",
+        "单笔、每条记录",
+        "示例 4",
+        "销售额大于10000元",
+    ):
+        assert overfit_example not in prompt_text
+    assert '"clause"' not in prompt_text
+    assert '"source_query"' not in prompt_text
+    assert captured["model"] is SemanticDraft
+    assert "source_query" not in captured["schema"]["properties"]
     assert '"value_candidate_ids":[]' in prompt_text
     for forbidden in (
         "canonical_value",
@@ -228,7 +244,7 @@ def test_fallback_keeps_exact_ids_but_does_not_infer_roles_operators_or_time(
         for report in result.ambiguity_reports
         if report.reason == "semantic_interpretation_failed"
     )
-    assert failure_report.raw_text == result.source_query
+    assert failure_report.raw_text == "按地区统计2025年第一季度销售额最高的前5名"
     assert failure_report.candidate_ids == []
 
 
@@ -261,7 +277,6 @@ def test_fallback_never_selects_first_value_when_exact_term_has_multiple_ids(
 def test_interpreter_ignores_backend_owned_temporal_target_ids(monkeypatch):
     async def fake_invoke(*args, **kwargs):
         return {
-            "source_query": "2025年第一季度销售额",
             "measure_mentions": [{"raw_text": "销售额", "candidate_ids": ["GMV"]}],
             "dimension_mentions": [],
             "predicate_mentions": [
@@ -292,7 +307,6 @@ def test_interpreter_ignores_backend_owned_temporal_target_ids(monkeypatch):
 def test_interpreter_ignores_redundant_enum_column_candidate_ids(monkeypatch):
     async def fake_invoke(*args, **kwargs):
         return {
-            "source_query": "统计华北销售额",
             "predicate_mentions": [
                 {
                     "kind": "enum",
@@ -323,7 +337,6 @@ def test_interpreter_ignores_redundant_enum_column_candidate_ids(monkeypatch):
 def test_interpreter_preserves_enum_mention_without_value_candidates(monkeypatch):
     async def fake_invoke(*args, **kwargs):
         return {
-            "source_query": "统计火星区域销售额",
             "predicate_mentions": [
                 {
                     "kind": "enum",
@@ -353,7 +366,6 @@ def test_interpreter_preserves_enum_mention_without_value_candidates(monkeypatch
 def test_temporal_filter_is_not_duplicated_as_group_dimension(monkeypatch):
     async def fake_invoke(*args, **kwargs):
         return {
-            "source_query": "2025年第一季度销售额最高的前5个商品",
             "measure_mentions": [{"raw_text": "销售额", "candidate_ids": ["GMV"]}],
             "dimension_mentions": [
                 {
@@ -397,7 +409,7 @@ def test_prompt_forbids_temporal_candidate_ids_and_implicit_time_grouping(
 
     async def fake_invoke(prompt, _llm, _parser, inputs, *_args, **_kwargs):
         captured["text"] = (await prompt.ainvoke(inputs)).to_string()
-        return {"source_query": inputs["query"]}
+        return {}
 
     monkeypatch.setattr(interpreter, "ainvoke_llm_with_usage", fake_invoke)
     asyncio.run(
@@ -418,7 +430,7 @@ def test_prompt_limits_join_choice_to_relationship_and_preserved_side(monkeypatc
 
     async def fake_invoke(prompt, _llm, _parser, inputs, *_args, **_kwargs):
         captured["text"] = (await prompt.ainvoke(inputs)).to_string()
-        return {"source_query": inputs["query"]}
+        return {}
 
     monkeypatch.setattr(interpreter, "ainvoke_llm_with_usage", fake_invoke)
     asyncio.run(
@@ -439,7 +451,6 @@ def test_prompt_limits_join_choice_to_relationship_and_preserved_side(monkeypatc
 def test_interpreter_allowlists_join_mention_fields(monkeypatch):
     async def fake_invoke(*args, **kwargs):
         return {
-            "source_query": "包括没有订单的地区",
             "join_mentions": [
                 {
                     "raw_text": "包括没有订单的地区",

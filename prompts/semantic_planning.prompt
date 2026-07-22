@@ -7,6 +7,7 @@
 - 只判断用户表达的指标、维度角色、谓词意图、排序意图和数量限制原文。
 - 枚举筛选只输出 kind、raw_text、value_candidate_ids、operator_intent。取值候选已经包含所属字段，不要再为枚举筛选选择字段候选。
 - 用户明确表达了枚举筛选，但目录中没有对应取值候选时，仍保留该枚举筛选并输出空的 value_candidate_ids；不要省略筛选，也不要用字段候选代替取值候选。
+- 数值谓词的 target_candidate_ids 必须匹配比较发生的语义层级：约束聚合或派生结果时选择指标 candidate_id；约束单条记录的原始属性时选择字段 candidate_id。只标注比较目标、运算符和值，不决定 SQL 子句位置。
 - 时间谓词只标注 kind、raw_text、relation_intent；时间谓词禁止输出 target_candidate_ids，不选择时间字段，也不计算日期边界。
 - 关系目录只用于表达用户是否明确要求保留没有匹配记录的对象。普通关联可以省略 join_mentions；明确要求“包括没有订单的地区”等保留语义时，必须选择真实存在的 relationship_candidate_id，输出 join_type=left，并用 left_table_candidate_id 指明需要保留的表。明确要求只保留两侧都匹配的记录时可输出 join_type=inner。
 - 不要编写连接条件，不要创造关系、表或字段；只选择目录给出的关系 ID。无法判断保留哪一侧时写入 ambiguity_reports，不要猜测。
@@ -21,7 +22,7 @@
 问题：按地区统计华北的销售额
 目录分别提供指标 metric_gmv、维度 column_region、取值 value_north，且 value_north 所属字段为 column_region。
 输出应包含：
-{{"source_query":"按地区统计华北的销售额","measure_mentions":[{{"raw_text":"销售额","candidate_ids":["metric_gmv"]}}],"dimension_mentions":[{{"raw_text":"地区","candidate_ids":["column_region"],"role":"group_by"}}],"predicate_mentions":[{{"kind":"enum","raw_text":"华北","value_candidate_ids":["value_north"],"operator_intent":"eq"}}]}}
+{{"measure_mentions":[{{"raw_text":"销售额","candidate_ids":["metric_gmv"]}}],"dimension_mentions":[{{"raw_text":"地区","candidate_ids":["column_region"],"role":"group_by"}}],"predicate_mentions":[{{"kind":"enum","raw_text":"华北","value_candidate_ids":["value_north"],"operator_intent":"eq"}}]}}
 
 示例 2：
 问题：统计华南销售额
@@ -32,7 +33,7 @@
 问题：统计火星区域销售额
 目录提供销售额指标，但没有“火星区域”的取值候选。
 输出仍应包含：
-{{"source_query":"统计火星区域销售额","measure_mentions":[{{"raw_text":"销售额","candidate_ids":["metric_gmv"]}}],"predicate_mentions":[{{"kind":"enum","raw_text":"火星区域","value_candidate_ids":[],"operator_intent":"eq"}}]}}
+{{"measure_mentions":[{{"raw_text":"销售额","candidate_ids":["metric_gmv"]}}],"predicate_mentions":[{{"kind":"enum","raw_text":"火星区域","value_candidate_ids":[],"operator_intent":"eq"}}]}}
 
 <candidate_catalog>
 {catalog_json}

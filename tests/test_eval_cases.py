@@ -26,10 +26,7 @@ def test_infer_exception_stage_uses_traceback_node_name():
         assert _infer_exception_stage(exc) == "rag_recall"
 
 
-def test_infer_exception_stage_uses_compacted_graph_names():
-    def context_compaction():
-        raise RuntimeError("context failed")
-
+def test_infer_exception_stage_uses_current_graph_names():
     def correct_sql_candidate():
         raise RuntimeError("sql correction failed")
 
@@ -37,7 +34,6 @@ def test_infer_exception_stage_uses_compacted_graph_names():
         raise RuntimeError("sql execution failed")
 
     cases = [
-        (context_compaction, "context_filter"),
         (correct_sql_candidate, "sql_validation"),
         (sql_executor, "tool_execution"),
     ]
@@ -88,6 +84,10 @@ def test_evaluate_case_passes_when_sql_and_context_match():
                 }
             ],
             "order_by": [],
+            "required_column_ids": [
+                "fact_order.order_amount",
+                "dim_region.region_name",
+            ],
         },
         "output": {"rows": [{"销售总额": 1}]},
     }
@@ -262,7 +262,11 @@ def test_evaluate_case_keeps_tool_execution_timeout_stage_for_sql_state():
         expected_result={"mode": "non_empty"},
     )
     state = {
-        "trace": {"keywords": ["GMV"]},
+        "trace": {
+            "keywords": ["GMV"],
+            "retrieved_columns": ["fact_order.order_amount"],
+            "retrieved_metrics": ["GMV"],
+        },
         "failure": {
             "category": "sql_execution",
             "stage": "tool_execution",
@@ -271,9 +275,9 @@ def test_evaluate_case_keeps_tool_execution_timeout_stage_for_sql_state():
             "disposition": "failed",
         },
         "sql": "select sum(order_amount) from fact_order",
-        "sql_context": {
-            "tables": [{"name": "fact_order", "columns": [{"name": "order_amount"}]}],
-            "metrics": [{"name": "GMV"}],
+        "semantic_plan": {
+            "measures": [{"metric_id": "GMV"}],
+            "required_column_ids": ["fact_order.order_amount"],
         },
     }
 

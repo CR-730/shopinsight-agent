@@ -16,6 +16,7 @@ from app.agent.failure import build_failure
 from app.agent.llm import llm
 from app.agent.llm_usage import ainvoke_llm_with_usage
 from app.agent.predicate_normalization import stable_fingerprint
+from app.agent.semantic_planning.plan import SemanticQueryPlan
 from app.agent.sql.plan_consistency import validate_sql_plan_consistency
 from app.agent.sql.sql_correction import correct_sql_candidate
 from app.agent.sql.sql_executor import SqlExecutionRequest, SqlExecutor
@@ -254,12 +255,14 @@ def _sql_fingerprint(sql: str) -> str:
 
 
 def _result_meta(state: dict) -> dict:
-    tables = []
-    for table in (state.get("sql_context") or {}).get("tables") or []:
-        name = str(table.get("name") or "").strip()
-        if name and name not in tables:
-            tables.append(name)
-    return {"tables": tables[:5]}
+    raw_plan = state.get("semantic_plan")
+    if not raw_plan:
+        return {"tables": []}
+    try:
+        plan = SemanticQueryPlan.model_validate(raw_plan)
+    except ValueError:
+        return {"tables": []}
+    return {"tables": list(dict.fromkeys(plan.required_table_ids))[:5]}
 
 
 async def _analyze_result(query: str, rows: list[dict], runtime: Runtime) -> str:

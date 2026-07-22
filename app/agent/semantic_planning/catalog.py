@@ -1,7 +1,6 @@
 """Build the request-scoped catalog used by controlled semantic planning."""
 
 from dataclasses import dataclass
-from hashlib import sha256
 from types import MappingProxyType
 from typing import Any, Mapping
 
@@ -12,7 +11,6 @@ from app.agent.schema_relations import (
 )
 from app.entities.column_info import ColumnInfo
 from app.entities.metric_info import MetricInfo
-from app.entities.value_alias import ValueAlias
 from app.entities.value_info import ValueInfo
 
 
@@ -95,7 +93,6 @@ def build_semantic_candidate_catalog(
     *,
     sql_context: Mapping[str, Any],
     retrieved_value_infos: list[ValueInfo],
-    value_aliases: list[ValueAlias],
     authoritative_columns: list[ColumnInfo],
     authoritative_metrics: list[MetricInfo],
     metadata_version: str,
@@ -119,7 +116,7 @@ def build_semantic_candidate_catalog(
         authoritative_columns,
         exposed_table_ids=set(tables),
     )
-    values = _build_value_candidates(columns, retrieved_value_infos, value_aliases)
+    values = _build_value_candidates(columns, retrieved_value_infos)
     return SemanticCandidateCatalog(
         metadata_version=metadata_version,
         tables=MappingProxyType(tables),
@@ -249,43 +246,31 @@ def _build_relationship_candidates(
 def _build_value_candidates(
     columns: Mapping[str, ColumnCandidate],
     retrieved_value_infos: list[ValueInfo],
-    value_aliases: list[ValueAlias],
 ) -> dict[str, ValueCandidate]:
-    entries: dict[tuple[str, str], dict[str, Any]] = {}
+    candidates: dict[str, ValueCandidate] = {}
     for value_info in retrieved_value_infos:
         if value_info.column_id not in columns:
             continue
-        entries.setdefault(
-            (value_info.column_id, value_info.value),
-            {"aliases": [], "retrieved": False, "meta_alias": False},
-        )["retrieved"] = True
-
-    for value_alias in value_aliases:
-        if value_alias.column_id not in columns:
+        existing = candidates.get(value_info.id)
+        if existing is not None:
+            if (
+                existing.column_id != value_info.column_id
+                or existing.canonical_value != value_info.value
+            ):
+                raise ValueError(f"value_candidate_identity_conflict: {value_info.id}")
             continue
-        entry = entries.setdefault(
-            (value_alias.column_id, value_alias.canonical_value),
-            {"aliases": [], "retrieved": False, "meta_alias": False},
-        )
-        entry["meta_alias"] = True
-        if value_alias.alias != value_alias.canonical_value:
-            entry["aliases"].append(value_alias.alias)
-
-    candidates: dict[str, ValueCandidate] = {}
-    for (column_id, canonical_value), entry in entries.items():
-        digest = sha256(f"{column_id}\0{canonical_value}".encode()).hexdigest()
-        candidate_id = f"value:{column_id}:{digest}"
-        source = (
-            "retrieval_or_meta_alias"
-            if entry["retrieved"] and entry["meta_alias"]
-            else ("retrieval" if entry["retrieved"] else "meta_alias")
-        )
-        candidates[candidate_id] = ValueCandidate(
-            candidate_id=candidate_id,
-            canonical_value=canonical_value,
-            aliases=_unique_strings(entry["aliases"]),
-            column_id=column_id,
-            source=source,
+        matched_aliases = [
+            text
+            for text in value_info.matched_texts
+            if text and text != value_info.value
+        ]
+        sources = list(getattr(value_info, "sources", None) or [])
+        candidates[value_info.id] = ValueCandidate(
+            candidate_id=value_info.id,
+            canonical_value=value_info.value,
+            aliases=_unique_strings(matched_aliases),
+            column_id=value_info.column_id,
+            source="_or_".join(sources) if sources else "retrieval",
         )
     return candidates
 

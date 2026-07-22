@@ -30,10 +30,9 @@ async def build_semantic_plan(state, runtime) -> dict[str, Any]:
         sql_context = state.get("sql_context") or {}
         retrieval_context = state.get("retrieval_context") or {}
         repository = runtime.context["meta_mysql_repository"]
-        columns, metrics, value_aliases = await asyncio.gather(
+        columns, metrics = await asyncio.gather(
             repository.list_column_infos(),
             repository.list_metric_infos(),
-            repository.list_value_aliases(),
         )
         metadata_version = str(
             runtime.context.get("metadata_cache_version") or ""
@@ -51,7 +50,6 @@ async def build_semantic_plan(state, runtime) -> dict[str, Any]:
         catalog = build_semantic_candidate_catalog(
             sql_context=sql_context,
             retrieved_value_infos=retrieval_context.get("values") or [],
-            value_aliases=value_aliases,
             authoritative_columns=columns,
             authoritative_metrics=metrics,
             metadata_version=metadata_version,
@@ -70,7 +68,6 @@ async def build_semantic_plan(state, runtime) -> dict[str, Any]:
             draft,
             SemanticResolutionContext(
                 catalog=catalog,
-                dw_repository=runtime.context["dw_mysql_repository"],
                 trusted_sources=_trusted_sources(
                     query,
                     conversation_history=conversation_history,

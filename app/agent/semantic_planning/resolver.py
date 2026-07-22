@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from datetime import date
-from typing import Any
 
 from app.agent.semantic_planning.catalog import SemanticCandidateCatalog
 from app.agent.semantic_planning.draft import (
@@ -54,7 +53,6 @@ from app.agent.semantic_planning.resolvers.temporal import (
 @dataclass(frozen=True)
 class SemanticResolutionContext:
     catalog: SemanticCandidateCatalog
-    dw_repository: Any
     trusted_sources: tuple[str, ...]
     reference_date: date
     temporal_column_id: str
@@ -130,9 +128,7 @@ async def resolve_semantic_draft(
             PlanningIssue(
                 phase="resolution",
                 code="multiple_time_turns_unsupported",
-                source_span=" ".join(
-                    mention.raw_text for mention in temporal_mentions
-                ),
+                source_span=" ".join(mention.raw_text for mention in temporal_mentions),
                 candidate_ids=[],
                 details={},
             )
@@ -145,7 +141,6 @@ async def resolve_semantic_draft(
                 mention,
                 EnumResolutionContext(
                     catalog=context.catalog,
-                    dw_repository=context.dw_repository,
                     trusted_sources=context.trusted_sources,
                 ),
             )
@@ -222,7 +217,9 @@ async def resolve_semantic_draft(
             PlanningIssue(
                 phase="resolution",
                 code="business_object_not_planned",
-                source_span=draft.source_query,
+                source_span=(
+                    context.trusted_sources[0] if context.trusted_sources else ""
+                ),
                 candidate_ids=[],
                 details={},
             )
@@ -286,9 +283,7 @@ def _collect_ambiguity_reports(
                 phase="interpretation",
                 code=code,
                 source_span=report.raw_text,
-                candidate_ids=invalid_ids or list(
-                    dict.fromkeys(report.candidate_ids)
-                ),
+                candidate_ids=invalid_ids or list(dict.fromkeys(report.candidate_ids)),
                 details={},
             )
         )

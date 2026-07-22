@@ -3,7 +3,6 @@ from types import SimpleNamespace
 
 from app.agent.node_observer import traced_node
 from app.agent.nodes import context_builder as context_builder_module
-from app.agent.nodes import context_compaction as context_compaction_module
 from app.agent.nodes import sql_executor as sql_executor_module
 
 
@@ -108,92 +107,6 @@ def test_context_builder_returns_structured_context_and_trace(monkeypatch):
             "retrieved_metrics": ["metric"],
             "retrieved_values": ["value"],
         },
-    }
-
-
-def test_context_compaction_returns_sql_context(monkeypatch):
-    async def fake_compile_context_from_plan(state, context):
-        assert state["semantic_plan"] == {"version": "1"}
-        assert context == {"dw_mysql_repository": "repo"}
-        return {
-            "table_infos": ["filtered_table"],
-            "metric_infos": ["filtered_metric"],
-        }
-
-    async def fake_add_runtime_context(state, context):
-        assert state["semantic_plan"] == {"version": "1"}
-        assert context == {"dw_mysql_repository": "repo"}
-        return {
-            "date_info": {
-                "date": "2026-06-03",
-                "weekday": "Wednesday",
-                "quarter": "Q2",
-            },
-            "db_info": {"dialect": "mysql", "version": "8.0"},
-        }
-
-    monkeypatch.setattr(
-        context_compaction_module,
-        "compile_context_from_plan",
-        fake_compile_context_from_plan,
-    )
-    monkeypatch.setattr(
-        context_compaction_module, "add_runtime_context", fake_add_runtime_context
-    )
-
-    result = asyncio.run(
-        context_compaction_module.context_compaction(
-            {"query": "统计 GMV", "semantic_plan": {"version": "1"}},
-            SimpleNamespace(context={"dw_mysql_repository": "repo"}),
-        )
-    )
-
-    assert result == {
-        "sql_context": {
-            "tables": ["filtered_table"],
-            "metrics": ["filtered_metric"],
-            "date": {"date": "2026-06-03", "weekday": "Wednesday", "quarter": "Q2"},
-            "db": {"dialect": "mysql", "version": "8.0"},
-        }
-    }
-
-
-def test_context_compaction_turns_metadata_issue_into_failed_system_failure(
-    monkeypatch,
-):
-    async def fake_compile_context_from_plan(state, context):
-        return {
-            "table_infos": [],
-            "issue": {
-                "category": "system",
-                "type": "column",
-                "reason": "metadata_column_not_found",
-                "candidate_ids": ["ghost_table.ghost_column"],
-            },
-        }
-
-    monkeypatch.setattr(
-        context_compaction_module,
-        "compile_context_from_plan",
-        fake_compile_context_from_plan,
-    )
-
-    result = asyncio.run(
-        context_compaction_module.context_compaction(
-            {
-                "query": "幽灵字段",
-                "semantic_plan": {"version": "1"},
-            },
-            SimpleNamespace(context={}),
-        )
-    )
-
-    assert result["failure"] == {
-        "category": "system",
-        "stage": "context_compaction",
-        "code": "metadata_column_not_found",
-        "message": "Required column metadata was not found",
-        "disposition": "failed",
     }
 
 

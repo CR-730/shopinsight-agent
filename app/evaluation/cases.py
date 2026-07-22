@@ -131,15 +131,19 @@ def evaluate_case(case: EvalCase, state: dict[str, Any]) -> EvalResult:
 
 def build_trace(state: dict[str, Any]) -> dict[str, Any]:
     debug_trace = state.get("trace") or {}
-    sql_context = state.get("sql_context") or {}
+    semantic_plan = state.get("semantic_plan") or {}
     retrieved_columns = sorted(debug_trace.get("retrieved_columns") or [])
     retrieved_metrics = sorted(debug_trace.get("retrieved_metrics") or [])
     retrieved_values = sorted(debug_trace.get("retrieved_values") or [])
-    filtered_columns = sorted(_extract_column_ids(sql_context.get("tables") or []))
+    filtered_columns = sorted(
+        str(column_id)
+        for column_id in semantic_plan.get("required_column_ids") or []
+        if str(column_id)
+    )
     filtered_metrics = sorted(
-        metric_info.get("name")
-        for metric_info in sql_context.get("metrics") or []
-        if metric_info.get("name")
+        str(measure.get("metric_id"))
+        for measure in semantic_plan.get("measures") or []
+        if measure.get("metric_id")
     )
     generated_sql = str(state.get("sql") or "")
     failure = state.get("failure") or {}
@@ -165,7 +169,6 @@ def build_trace(state: dict[str, Any]) -> dict[str, Any]:
         and failure_category in {"sql_execution", "system"}
         else None
     )
-    semantic_plan = state.get("semantic_plan") or {}
     planning_issues = debug_trace.get("planning_issues") or []
 
     return {
@@ -301,7 +304,7 @@ def _evaluate_failures(case: EvalCase, trace: dict[str, Any]) -> list[EvalFailur
             stage: FailureStage = (
                 "rag_recall"
                 if column_id not in trace["retrieved_columns"]
-                else "context_filter"
+                else "semantic_planning"
             )
             failures.append(
                 EvalFailure(
@@ -316,7 +319,7 @@ def _evaluate_failures(case: EvalCase, trace: dict[str, Any]) -> list[EvalFailur
             stage = (
                 "rag_recall"
                 if metric not in trace["retrieved_metrics"]
-                else "context_filter"
+                else "semantic_planning"
             )
             failures.append(
                 EvalFailure(
@@ -382,7 +385,7 @@ def _evaluate_failures(case: EvalCase, trace: dict[str, Any]) -> list[EvalFailur
                     EvalFailure(
                         code="missing_expected_time_binding",
                         message=f"时间绑定不匹配：{key}={expected_value}",
-                        stage="context_filter",
+                        stage="semantic_planning",
                     )
                 )
 
@@ -579,17 +582,6 @@ def _first_failure_stage(failures: list[EvalFailure]) -> FailureStage | None:
         if stage in by_stage:
             return stage
     return failures[0].stage
-
-
-def _extract_column_ids(table_infos: list[dict]) -> set[str]:
-    column_ids: set[str] = set()
-    for table_info in table_infos:
-        table_name = table_info.get("name")
-        for column_info in table_info.get("columns") or []:
-            column_name = column_info.get("name")
-            if table_name and column_name:
-                column_ids.add(f"{table_name}.{column_name}")
-    return column_ids
 
 
 def _entity_ids(items: list[Any]) -> list[str]:

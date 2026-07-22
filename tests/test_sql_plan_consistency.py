@@ -56,7 +56,6 @@ def _plan():
                 "column_id": "dim_region.region_name",
                 "operator": "eq",
                 "canonical_values": ["华北"],
-                "allowed_sql_literals": ["华北"],
             },
             {
                 "kind": "numeric",
@@ -105,7 +104,6 @@ def _multi_value_enum_plan():
         predicate.update(
             operator="in",
             canonical_values=["华北", "华南"],
-            allowed_sql_literals=["华北", "华南"],
         )
     return plan
 
@@ -118,7 +116,6 @@ def _excluded_enum_plan():
         predicate.update(
             operator="not_in",
             canonical_values=["华北", "华南"],
-            allowed_sql_literals=["华北", "华南"],
         )
     return plan
 
@@ -157,7 +154,11 @@ def test_accepts_left_join_with_planned_preserved_side():
             "join_type": "left",
         }
     ]
-    sql = BASE_SQL.replace("JOIN dim_region", "LEFT JOIN dim_region")
+    sql = BASE_SQL.replace(
+        "JOIN dim_region AS dr ON fo.region_id = dr.region_id",
+        "LEFT JOIN dim_region AS dr "
+        "ON fo.region_id = dr.region_id AND dr.region_name = '华北'",
+    ).replace("\n  AND dr.region_name = '华北'", "")
 
     assert validate_sql_plan_consistency(sql, plan).ok is True
 
@@ -179,6 +180,143 @@ def test_rejects_reversed_left_join_direction():
     result = validate_sql_plan_consistency(sql, plan)
 
     assert "join_direction_mismatch" in {
+        difference.code for difference in result.differences
+    }
+
+
+def test_left_join_requires_right_side_predicates_in_join_on():
+    plan = deepcopy(_plan())
+    plan["joins"] = [
+        {
+            "left_column_id": "dim_region.region_id",
+            "right_column_id": "fact_order.region_id",
+            "join_type": "left",
+        }
+    ]
+    sql = """
+SELECT
+  dr.region_name AS 地区,
+  SUM(fo.order_amount) AS GMV
+FROM dim_region AS dr
+LEFT JOIN fact_order AS fo ON dr.region_id = fo.region_id
+WHERE fo.date_id BETWEEN 20250101 AND 20250331
+  AND dr.region_name = '华北'
+GROUP BY dr.region_name
+HAVING SUM(fo.order_amount) > 10000
+ORDER BY GMV DESC
+LIMIT 5
+"""
+
+    result = validate_sql_plan_consistency(sql, plan)
+
+    assert result.ok is False
+    assert "temporal_predicate_mismatch" in {
+        difference.code for difference in result.differences
+    }
+
+
+def test_accepts_left_join_right_side_predicates_in_join_on():
+    plan = deepcopy(_plan())
+    plan["joins"] = [
+        {
+            "left_column_id": "dim_region.region_id",
+            "right_column_id": "fact_order.region_id",
+            "join_type": "left",
+        }
+    ]
+    sql = """
+SELECT
+  dr.region_name AS 地区,
+  SUM(fo.order_amount) AS GMV
+FROM dim_region AS dr
+LEFT JOIN fact_order AS fo
+  ON dr.region_id = fo.region_id
+ AND fo.date_id BETWEEN 20250101 AND 20250331
+WHERE dr.region_name = '华北'
+GROUP BY dr.region_name
+HAVING SUM(fo.order_amount) > 10000
+ORDER BY GMV DESC
+LIMIT 5
+"""
+
+    assert validate_sql_plan_consistency(sql, plan).ok is True
+
+
+def test_rejects_right_side_predicate_attached_to_a_different_left_join():
+    plan = deepcopy(_plan())
+    plan["joins"] = [
+        {
+            "left_column_id": "dim_region.region_id",
+            "right_column_id": "fact_order.region_id",
+            "join_type": "left",
+        },
+        {
+            "left_column_id": "dim_region.region_id",
+            "right_column_id": "dim_product.product_id",
+            "join_type": "left",
+        },
+    ]
+    plan["required_table_ids"].append("dim_product")
+    plan["required_column_ids"].append("dim_product.product_id")
+    sql = """
+SELECT
+  dr.region_name AS 地区,
+  SUM(fo.order_amount) AS GMV
+FROM dim_region AS dr
+LEFT JOIN fact_order AS fo ON dr.region_id = fo.region_id
+LEFT JOIN dim_product AS dp
+  ON dr.region_id = dp.product_id
+ AND fo.date_id BETWEEN 20250101 AND 20250331
+WHERE dr.region_name = '华北'
+GROUP BY dr.region_name
+HAVING SUM(fo.order_amount) > 10000
+ORDER BY GMV DESC
+LIMIT 5
+"""
+
+    result = validate_sql_plan_consistency(sql, plan)
+
+    assert result.ok is False
+    assert "temporal_predicate_mismatch" in {
+        difference.code for difference in result.differences
+    }
+
+
+def test_rejects_join_on_that_references_a_table_not_yet_in_scope():
+    plan = deepcopy(_plan())
+    plan["predicates"] = []
+    plan["joins"] = [
+        {
+            "left_column_id": "dim_region.region_id",
+            "right_column_id": "fact_order.region_id",
+            "join_type": "left",
+        },
+        {
+            "left_column_id": "fact_order.product_id",
+            "right_column_id": "dim_product.product_id",
+            "join_type": "left",
+        },
+    ]
+    plan["required_table_ids"].append("dim_product")
+    plan["required_column_ids"].extend(
+        ["fact_order.product_id", "dim_product.product_id"]
+    )
+    sql = """
+SELECT
+  dr.region_name AS 地区,
+  SUM(fo.order_amount) AS GMV
+FROM dim_region AS dr
+LEFT JOIN dim_product AS dp ON fo.product_id = dp.product_id
+LEFT JOIN fact_order AS fo ON dr.region_id = fo.region_id
+GROUP BY dr.region_name
+ORDER BY GMV DESC
+LIMIT 5
+"""
+
+    result = validate_sql_plan_consistency(sql, plan)
+
+    assert result.ok is False
+    assert "join_scope_invalid" in {
         difference.code for difference in result.differences
     }
 
@@ -394,7 +532,7 @@ def test_rejects_extra_join_condition():
         "fo.region_id = dr.region_id AND dr.region_name <> '鍗庡崡'",
     )
 
-    assert "join_extra" in _codes(sql)
+    assert "predicate_extra" in _codes(sql)
 
 
 def test_rejects_duplicate_select_alias_that_would_hide_an_extra_item():

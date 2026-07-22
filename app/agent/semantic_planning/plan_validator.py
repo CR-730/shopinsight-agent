@@ -19,6 +19,7 @@ from app.agent.semantic_planning.plan import (
     EnumPredicate,
     JoinPlan,
     NumericPredicate,
+    RequiredColumnPlan,
     SemanticQueryPlan,
     TemporalPredicate,
 )
@@ -59,7 +60,12 @@ def validate_plan(
                 },
             )
         )
-    if plan.joins or plan.required_table_ids or plan.required_column_ids:
+    if (
+        plan.joins
+        or plan.required_table_ids
+        or plan.required_column_ids
+        or plan.required_columns
+    ):
         issues.append(_issue("plan_closure_must_be_empty"))
 
     selected_measures: set[str] = set()
@@ -169,6 +175,7 @@ def validate_plan(
         preference.relationship_candidate_id
         for preference in join_preferences
         if preference.relationship_candidate_id not in closure_relationship_ids
+        and preference.join_type == "left"
     ]
     if extra_preferences:
         return SemanticPlanningResult(
@@ -216,6 +223,13 @@ def validate_plan(
                 "joins": joins,
                 "required_table_ids": sorted(closure.table_ids),
                 "required_column_ids": sorted(all_columns),
+                "required_columns": [
+                    RequiredColumnPlan(
+                        column_id=column_id,
+                        data_type=catalog.columns[column_id].data_type,
+                    )
+                    for column_id in sorted(all_columns)
+                ],
             }
         ),
     )
@@ -229,8 +243,6 @@ def _validate_enum(predicate, catalog, required_columns, issues) -> None:
         issues.append(_issue("enum_value_required", [predicate.column_id]))
     if predicate.operator in {"eq", "neq"} and len(predicate.canonical_values) != 1:
         issues.append(_issue("enum_value_count_invalid", [predicate.column_id]))
-    if predicate.allowed_sql_literals != predicate.canonical_values:
-        issues.append(_issue("enum_literal_mismatch", [predicate.column_id]))
     required_columns.add(predicate.column_id)
 
 

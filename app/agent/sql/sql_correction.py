@@ -6,6 +6,7 @@ from langchain_core.prompts import PromptTemplate
 
 from app.agent.llm import correct_sql_llm
 from app.agent.llm_usage import ainvoke_llm_with_usage
+from app.agent.sql.plan_projection import project_plan_for_sql
 from app.agent.sql.sql_guard import (
     normalize_sql_for_execution,
     repair_invalid_join_relationship,
@@ -38,7 +39,6 @@ async def correct_sql_candidate(
             template=load_prompt("correct_sql"),
             input_variables=[
                 "semantic_plan",
-                "table_infos",
                 "sql",
                 "differences",
             ],
@@ -47,12 +47,7 @@ async def correct_sql_candidate(
         StrOutputParser(),
         {
             "semantic_plan": yaml.dump(
-                state.get("semantic_plan") or {},
-                allow_unicode=True,
-                sort_keys=False,
-            ),
-            "table_infos": yaml.dump(
-                (state.get("sql_context") or {}).get("tables") or [],
+                project_plan_for_sql(state.get("semantic_plan") or {}),
                 allow_unicode=True,
                 sort_keys=False,
             ),

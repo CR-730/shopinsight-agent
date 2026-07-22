@@ -15,7 +15,6 @@ from app.agent.semantic_planning.draft import (
 def test_draft_accepts_only_llm_owned_semantic_evidence():
     draft = SemanticDraft.model_validate(
         {
-            "source_query": "按地区统计销售额大于10000元的前5名，限定2025年第一季度",
             "measure_mentions": [
                 {"raw_text": "销售额", "candidate_ids": ["metric:sales"]}
             ],
@@ -77,7 +76,6 @@ def test_order_direction_is_limited_to_asc_or_desc(direction: str):
 def test_predicates_are_discriminated_by_kind():
     draft = SemanticDraft.model_validate(
         {
-            "source_query": "华北销售额大于一万",
             "predicate_mentions": [
                 {
                     "kind": "enum",
@@ -103,9 +101,9 @@ def test_predicates_are_discriminated_by_kind():
 @pytest.mark.parametrize(
     ("payload", "forbidden_field"),
     [
-        ({"source_query": "统计销售额", "canonical_metric": "GMV"}, "canonical"),
-        ({"source_query": "统计销售额", "sql": "SELECT 1"}, "SQL"),
-        ({"source_query": "统计销售额", "joins": ["a.id=b.id"]}, "JOIN"),
+        ({"canonical_metric": "GMV"}, "canonical"),
+        ({"sql": "SELECT 1"}, "SQL"),
+        ({"joins": ["a.id=b.id"]}, "JOIN"),
     ],
 )
 def test_draft_rejects_backend_owned_top_level_fields(
@@ -114,6 +112,11 @@ def test_draft_rejects_backend_owned_top_level_fields(
     del forbidden_field
     with pytest.raises(ValidationError):
         SemanticDraft.model_validate(payload)
+
+
+def test_draft_rejects_backend_owned_source_query():
+    with pytest.raises(ValidationError):
+        SemanticDraft.model_validate({"source_query": "统计销售额"})
 
 
 def test_temporal_draft_rejects_computed_dates():

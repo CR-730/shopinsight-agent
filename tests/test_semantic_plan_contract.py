@@ -17,6 +17,7 @@ from app.agent.semantic_planning.plan import (
     NumericPredicate,
     OrderByPlan,
     PlanProvenance,
+    RequiredColumnPlan,
     SemanticQueryPlan,
     TemporalPredicate,
 )
@@ -49,7 +50,6 @@ def make_plan(**overrides: object) -> SemanticQueryPlan:
                 "column_id": "dim_region.region_name",
                 "operator": "in",
                 "canonical_values": ["华北地区", "华南地区"],
-                "allowed_sql_literals": ["华北地区", "华南地区"],
             }
         ],
         "order_by": [
@@ -95,6 +95,7 @@ def test_plan_has_stable_top_level_fields():
         "joins",
         "required_table_ids",
         "required_column_ids",
+        "required_columns",
         "provenance",
     }
 
@@ -115,6 +116,7 @@ def test_plan_models_cover_the_approved_contract():
         "right_column_id",
         "join_type",
     }
+    assert set(RequiredColumnPlan.model_fields) == {"column_id", "data_type"}
     assert set(PlanProvenance.model_fields) == {
         "raw_text",
         "resolved_id",
@@ -156,6 +158,7 @@ def test_predicates_are_discriminated_and_json_serializable():
 def test_enum_predicate_uses_only_plural_canonical_values():
     assert "canonical_values" in EnumPredicate.model_fields
     assert "canonical_value" not in EnumPredicate.model_fields
+    assert "allowed_sql_literals" not in EnumPredicate.model_fields
 
     predicate = EnumPredicate.model_validate(
         {
@@ -163,7 +166,6 @@ def test_enum_predicate_uses_only_plural_canonical_values():
             "column_id": "dim_region.region_name",
             "operator": "in",
             "canonical_values": ["华北地区", "华南地区"],
-            "allowed_sql_literals": ["华北地区", "华南地区"],
         }
     )
     assert predicate.canonical_values == ["华北地区", "华南地区"]
@@ -200,7 +202,6 @@ def test_enum_predicate_uses_only_plural_canonical_values():
                 "column_id": "dim_region.region_name",
                 "operator": "eq",
                 "canonical_values": ["华北地区"],
-                "allowed_sql_literals": ["华北地区"],
                 "unexpected": True,
             },
         ),

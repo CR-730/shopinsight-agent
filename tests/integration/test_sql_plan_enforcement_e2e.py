@@ -46,9 +46,7 @@ PLAN = {
             "clause": "having",
         },
     ],
-    "order_by": [
-        {"target_type": "measure", "target_id": "GMV", "direction": "desc"}
-    ],
+    "order_by": [{"target_type": "measure", "target_id": "GMV", "direction": "desc"}],
     "limit": 5,
     "joins": [
         {
@@ -126,7 +124,6 @@ def test_plan_inconsistent_sql_never_reaches_explain_or_execution(monkeypatch, s
                 "query": "复杂查询",
                 "sql": sql,
                 "semantic_plan": PLAN,
-                "sql_context": {"tables": []},
             },
             SimpleNamespace(
                 context={"dw_mysql_repository": repository},
@@ -157,7 +154,6 @@ def test_left_join_plan_executes_only_with_planned_preserved_side(monkeypatch):
                 "query": "包括没有订单的地区",
                 "sql": sql,
                 "semantic_plan": plan,
-                "sql_context": {"tables": []},
             },
             SimpleNamespace(
                 context={"dw_mysql_repository": repository},

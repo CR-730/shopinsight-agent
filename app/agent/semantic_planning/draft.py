@@ -79,7 +79,6 @@ class AmbiguityReport(_StrictDraftModel):
 
 
 class SemanticDraft(_StrictDraftModel):
-    source_query: str
     measure_mentions: list[MeasureMention] = Field(default_factory=list)
     dimension_mentions: list[DimensionMention] = Field(default_factory=list)
     predicate_mentions: list[PredicateMention] = Field(default_factory=list)

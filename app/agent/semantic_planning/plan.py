@@ -47,7 +47,6 @@ class EnumPredicate(_StrictPlanModel):
     column_id: str
     operator: Literal["eq", "neq", "in", "not_in"]
     canonical_values: list[str]
-    allowed_sql_literals: list[str] = Field(default_factory=list)
 
 
 class NumericPredicate(_StrictPlanModel):
@@ -88,6 +87,11 @@ class JoinPlan(_StrictPlanModel):
     join_type: Literal["inner", "left"]
 
 
+class RequiredColumnPlan(_StrictPlanModel):
+    column_id: str
+    data_type: str
+
+
 class PlanProvenance(_StrictPlanModel):
     raw_text: str
     resolved_id: str
@@ -106,6 +110,7 @@ class SemanticQueryPlan(_StrictPlanModel):
     joins: list[JoinPlan] = Field(default_factory=list)
     required_table_ids: list[str] = Field(default_factory=list)
     required_column_ids: list[str] = Field(default_factory=list)
+    required_columns: list[RequiredColumnPlan] = Field(default_factory=list)
     provenance: list[PlanProvenance] = Field(default_factory=list)
 
 
@@ -118,6 +123,7 @@ __all__ = [
     "OrderByPlan",
     "PlanProvenance",
     "PredicatePlan",
+    "RequiredColumnPlan",
     "SemanticQueryPlan",
     "TemporalPredicate",
 ]

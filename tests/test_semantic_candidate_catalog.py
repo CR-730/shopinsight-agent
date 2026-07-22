@@ -5,7 +5,6 @@ import pytest
 from app.agent.semantic_planning.catalog import build_semantic_candidate_catalog
 from app.entities.column_info import ColumnInfo
 from app.entities.metric_info import MetricInfo
-from app.entities.value_alias import ValueAlias
 from app.entities.value_info import ValueInfo
 
 
@@ -78,19 +77,13 @@ def _catalog(**changes):
                 id="north",
                 value="华北",
                 column_id="dim_region.region_name",
+                matched_texts=["北方区域"],
             ),
             ValueInfo(
                 id="hidden",
                 value="隐藏值",
                 column_id="dim_hidden.region_name",
             ),
-        ],
-        "value_aliases": [
-            ValueAlias(
-                column_id="dim_region.region_name",
-                alias="北方区域",
-                canonical_value="华北",
-            )
         ],
         "authoritative_columns": _authoritative_columns(),
         "authoritative_metrics": [_metric()],
@@ -129,6 +122,12 @@ def test_values_keep_owning_column_and_hidden_objects_are_not_promoted():
     assert "dim_hidden.region_name" not in catalog.columns
     with pytest.raises(KeyError):
         catalog.column_by_id("llm.invented_column")
+
+
+def test_catalog_does_not_promote_aliases_that_were_not_retrieved():
+    catalog = _catalog(retrieved_value_infos=[])
+
+    assert catalog.values == {}
 
 
 def test_metric_uses_authoritative_id_not_legacy_prefixed_name():

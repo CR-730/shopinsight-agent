@@ -75,8 +75,6 @@ def normalize_plan_predicates(
 
 
 def _valid_enum_shape(predicate: EnumPredicate) -> bool:
-    if predicate.allowed_sql_literals != predicate.canonical_values:
-        return False
     if not predicate.canonical_values:
         return False
     return not (
@@ -142,7 +140,6 @@ def _enum(column_id: str, operator: str, values: tuple[str, ...]) -> EnumPredica
         column_id=column_id,
         operator=operator,
         canonical_values=list(values),
-        allowed_sql_literals=list(values),
     )
 
 

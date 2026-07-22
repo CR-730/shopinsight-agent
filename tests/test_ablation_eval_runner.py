@@ -50,14 +50,9 @@ def test_ablation_specs_keep_retrieval_basic_without_sql_memory_or_value_recall(
         specs[("cost", "unoptimized")].ablation_options["disable_embedding_cache"]
         is True
     )
-    assert (
-        specs[("cost", "unoptimized")].ablation_options["disable_context_compaction"]
-        is True
-    )
     assert set(specs[("cost", "unoptimized")].ablation_options) == {
         "disable_non_sql_llm_cache",
         "disable_embedding_cache",
-        "disable_context_compaction",
     }
 
 

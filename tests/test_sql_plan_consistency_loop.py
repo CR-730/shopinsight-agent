@@ -79,7 +79,6 @@ def _state(sql=GOOD_SQL):
         "query": "2025年第一季度销售额最高的前5项",
         "sql": sql,
         "semantic_plan": PLAN,
-        "sql_context": {"tables": [{"name": "fact_order"}]},
     }
 
 
@@ -464,14 +463,23 @@ def test_correction_model_receives_only_plan_tables_sql_and_differences(monkeypa
 
     assert set(captured["inputs"]) == {
         "semantic_plan",
-        "table_infos",
         "sql",
         "differences",
     }
-    assert yaml.safe_load(captured["inputs"]["semantic_plan"]) == PLAN
+    correction_plan = yaml.safe_load(captured["inputs"]["semantic_plan"])
+    assert correction_plan["predicates"][0]["start_date_id"] == 20250101
+    assert correction_plan["predicates"][0]["end_date_id"] == 20250331
+    assert "start_date" not in correction_plan["predicates"][0]
+    assert "end_date" not in correction_plan["predicates"][0]
     assert yaml.safe_load(captured["inputs"]["differences"]) == [difference]
     assert "conversation_history" not in captured["inputs"]
     assert "唯一可信的业务语义来源" in captured["template"]
     assert "只修复 differences 指出的错误" in captured["template"]
     assert "join_type" in captured["template"]
     assert "LEFT JOIN 的保留侧" in captured["template"]
+    assert "required_columns" in captured["template"]
+    assert "data_type" in captured["template"]
+    assert "不得改写、格式化或单位转换" in captured["template"]
+    assert "所有行级谓词" in captured["template"]
+    assert "外连接的保行语义优先于默认子句位置" in captured["template"]
+    assert "numeric 的 clause=where" not in captured["template"]

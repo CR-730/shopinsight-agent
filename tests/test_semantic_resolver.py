@@ -25,11 +25,6 @@ from app.agent.semantic_planning.resolver import (
 )
 
 
-class FakeDWRepository:
-    async def column_value_exists(self, table, column, value):
-        return False
-
-
 def _column(column_id: str, role: str, data_type: str):
     table, name = column_id.split(".", 1)
     return ColumnCandidate(
@@ -91,10 +86,7 @@ def _catalog():
 
 def _draft(**changes):
     values = {
-        "source_query": "2025年第一季度华北地区销售额最高的前5个商品",
-        "measure_mentions": [
-            MeasureMention(raw_text="销售额", candidate_ids=["GMV"])
-        ],
+        "measure_mentions": [MeasureMention(raw_text="销售额", candidate_ids=["GMV"])],
         "dimension_mentions": [
             DimensionMention(
                 raw_text="商品",
@@ -128,7 +120,6 @@ def _context():
     query = "2025年第一季度华北地区销售额最高的前5个商品"
     return SemanticResolutionContext(
         catalog=_catalog(),
-        dw_repository=FakeDWRepository(),
         trusted_sources=(query,),
         reference_date=date(2026, 7, 19),
         temporal_column_id="fact_order.date_id",
@@ -163,9 +154,7 @@ def test_resolver_builds_internal_plan_and_preserves_provenance():
 
 def test_any_issue_blocks_the_entire_untrusted_plan():
     draft = _draft(
-        measure_mentions=[
-            MeasureMention(raw_text="销售额", candidate_ids=["invented"])
-        ]
+        measure_mentions=[MeasureMention(raw_text="销售额", candidate_ids=["invented"])]
     )
 
     result = asyncio.run(resolve_semantic_draft(draft, _context()))
@@ -208,7 +197,6 @@ def test_llm_ambiguity_report_blocks_without_selecting_first_candidate():
     context = _context()
     context = SemanticResolutionContext(
         catalog=context.catalog,
-        dw_repository=context.dw_repository,
         trusted_sources=(context.trusted_sources[0] + "，华南",),
         reference_date=context.reference_date,
         temporal_column_id=context.temporal_column_id,
@@ -236,10 +224,9 @@ def test_duplicate_mentions_are_stably_deduplicated():
 
 
 def test_empty_business_object_is_unresolved():
-    draft = SemanticDraft(source_query="你好")
+    draft = SemanticDraft()
     context = SemanticResolutionContext(
         catalog=_catalog(),
-        dw_repository=FakeDWRepository(),
         trusted_sources=("你好",),
         reference_date=date(2026, 7, 19),
         temporal_column_id="fact_order.date_id",
@@ -265,7 +252,6 @@ def test_multiple_independent_time_mentions_are_blocked():
     context = _context()
     context = SemanticResolutionContext(
         catalog=context.catalog,
-        dw_repository=context.dw_repository,
         trusted_sources=("比较2025年和2026年的销售额",),
         reference_date=context.reference_date,
         temporal_column_id=context.temporal_column_id,
@@ -279,8 +265,8 @@ def test_multiple_independent_time_mentions_are_blocked():
 
 
 def test_numeric_metric_predicate_is_included_as_having():
+    query = "2025年第一季度销售额大于10000元的地区"
     draft = _draft(
-        source_query="2025年第一季度销售额大于10000元的地区",
         dimension_mentions=[
             DimensionMention(
                 raw_text="地区",
@@ -305,8 +291,7 @@ def test_numeric_metric_predicate_is_included_as_having():
     context = _context()
     context = SemanticResolutionContext(
         catalog=context.catalog,
-        dw_repository=context.dw_repository,
-        trusted_sources=(draft.source_query,),
+        trusted_sources=(query,),
         reference_date=context.reference_date,
         temporal_column_id=context.temporal_column_id,
     )

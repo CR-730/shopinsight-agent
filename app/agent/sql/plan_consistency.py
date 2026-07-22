@@ -203,7 +203,9 @@ def _compare_joins(expression, plan, context, differences):
     actual: list[_JoinSignature] = []
     invalid_endpoints: list[frozenset[str]] = []
     unsupported_types: list[str] = []
+    available_table_ids = {_from_table_id(expression, context)}
     for join in expression.args.get("joins") or []:
+        joined_table = _joined_table_id(join, context)
         join_type = _actual_join_type(join)
         if join_type is None:
             unsupported_types.append(
@@ -215,16 +217,32 @@ def _compare_joins(expression, plan, context, differences):
             invalid_endpoints.append(frozenset({"<missing-on>"}))
             continue
         for predicate in _flatten_and(condition):
+            predicate = _unwrap_parens(predicate)
             if not isinstance(predicate, exp.EQ):
-                invalid_endpoints.append(
-                    frozenset({f"<invalid-on:{predicate.sql(dialect='mysql')}>"})
-                )
                 continue
             left = _column_id(predicate.left, context)
             right = _column_id(predicate.right, context)
             if left and right:
+                endpoint_tables = {
+                    left.rsplit(".", 1)[0],
+                    right.rsplit(".", 1)[0],
+                }
+                prior_tables = endpoint_tables - {joined_table}
+                if joined_table not in endpoint_tables or not prior_tables.issubset(
+                    available_table_ids
+                ):
+                    differences.append(
+                        _difference(
+                            "join_scope_invalid",
+                            f"joins.{joined_table}",
+                            {
+                                "joined_table": joined_table,
+                                "available_tables": sorted(available_table_ids),
+                            },
+                            predicate.sql(dialect="mysql"),
+                        )
+                    )
                 if join_type == "left":
-                    joined_table = _joined_table_id(join, context)
                     if left.rsplit(".", 1)[0] == joined_table:
                         left, right = right, left
                 actual.append(
@@ -234,10 +252,7 @@ def _compare_joins(expression, plan, context, differences):
                         join_type=join_type,
                     )
                 )
-            else:
-                invalid_endpoints.append(
-                    frozenset({f"<invalid-on:{predicate.sql(dialect='mysql')}>"})
-                )
+        available_table_ids.add(joined_table)
 
     if unsupported_types:
         differences.append(
@@ -325,6 +340,12 @@ def _joined_table_id(join: exp.Join, context: _SqlContext) -> str:
     return context.aliases.get(table_name, table_name)
 
 
+def _from_table_id(expression: exp.Select, context: _SqlContext) -> str:
+    from_clause = expression.args.get("from_")
+    table_name = str(getattr(getattr(from_clause, "this", None), "name", "")).casefold()
+    return context.aliases.get(table_name, table_name)
+
+
 def _compare_predicates(expression, plan, context, differences):
     expected = []
     kinds = []
@@ -342,6 +363,17 @@ def _compare_predicates(expression, plan, context, differences):
                 _sql_predicates(
                     node.this,
                     clause,
+                    context,
+                    expected_kinds,
+                )
+            )
+    for join in expression.args.get("joins") or []:
+        condition = join.args.get("on")
+        if condition is not None:
+            actual.extend(
+                _sql_join_predicates(
+                    condition,
+                    f"on:{_joined_table_id(join, context)}",
                     context,
                     expected_kinds,
                 )
@@ -481,7 +513,7 @@ def _expected_predicate(predicate, plan):
             "set_include" if predicate.operator in {"eq", "in"} else "set_exclude"
         )
         return (
-            "where",
+            _column_predicate_clause(predicate.column_id, plan),
             f"col:{predicate.column_id.casefold()}",
             operator,
             canonical_set_values(predicate.canonical_values),
@@ -496,7 +528,11 @@ def _expected_predicate(predicate, plan):
             else f"col:{predicate.target_id.casefold()}"
         )
         return (
-            predicate.clause,
+            (
+                _column_predicate_clause(predicate.target_id, plan)
+                if predicate.target_type == "column" and predicate.clause == "where"
+                else predicate.clause
+            ),
             target,
             predicate.operator,
             tuple(_number(value) for value in predicate.values),
@@ -517,7 +553,24 @@ def _expected_predicate(predicate, plan):
         sql_operator, values = "gte", (str(start),)
     else:
         sql_operator, values = "lte", (str(end),)
-    return ("where", f"col:{predicate.column_id.casefold()}", sql_operator, values)
+    return (
+        _column_predicate_clause(predicate.column_id, plan),
+        f"col:{predicate.column_id.casefold()}",
+        sql_operator,
+        values,
+    )
+
+
+def _column_predicate_clause(column_id, plan):
+    """Keep null-rejecting filters on a LEFT JOIN's nullable side inside ON."""
+
+    table_id = column_id.casefold().rsplit(".", 1)[0]
+    nullable_table_ids = {
+        join.right_column_id.casefold().rsplit(".", 1)[0]
+        for join in plan.joins
+        if join.join_type == "left"
+    }
+    return f"on:{table_id}" if table_id in nullable_table_ids else "where"
 
 
 def _sql_predicates(node, clause, context, expected_kinds):
@@ -530,6 +583,26 @@ def _sql_predicates(node, clause, context, expected_kinds):
         atom = _sql_predicate(_unwrap_parens(item), clause, context)
         atoms.append(_canonicalize_sql_atom(atom, expected_kinds))
     return atoms
+
+
+def _sql_join_predicates(node, clause, context, expected_kinds):
+    atoms = []
+    for item in _flatten_and(node):
+        item = _unwrap_parens(item)
+        if _is_join_endpoint(item, context):
+            continue
+        atoms.extend(_sql_predicates(item, clause, context, expected_kinds))
+    return atoms
+
+
+def _is_join_endpoint(node, context):
+    if not isinstance(node, exp.EQ):
+        return False
+    left = _column_id(node.left, context)
+    right = _column_id(node.right, context)
+    if not left or not right:
+        return False
+    return left.rsplit(".", 1)[0] != right.rsplit(".", 1)[0]
 
 
 def _fold_supported_or(node, clause, context, expected_kinds):

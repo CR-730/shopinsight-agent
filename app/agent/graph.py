@@ -1,10 +1,10 @@
-﻿"""Agent graph for the e-commerce NL2SQL flow.
+"""Agent graph for the e-commerce NL2SQL flow.
 
 The visible graph is intentionally compact:
-intent recognition -> context builder -> semantic planning -> context compaction
--> SQL generation -> SQL executor.
+intent recognition -> context builder -> semantic planning -> SQL generation
+-> SQL executor.
 
-Detailed retrieval, context pruning, SQL validation, correction, and execution
+Detailed retrieval, SQL validation, correction, and execution
 live inside helper modules so graph.py shows product-level stages only.
 """
 
@@ -17,7 +17,6 @@ from app.agent.context import DataAgentContext
 from app.agent.cost import CostRates, CostTracker
 from app.agent.node_observer import traced_node
 from app.agent.nodes.context_builder import context_builder
-from app.agent.nodes.context_compaction import context_compaction
 from app.agent.nodes.generate_sql import generate_sql
 from app.agent.nodes.intent_recognition import intent_recognition
 from app.agent.nodes.semantic_planning import semantic_planning
@@ -47,12 +46,11 @@ graph_builder = StateGraph(state_schema=DataAgentState, context_schema=DataAgent
 graph_builder.add_node(
     "intent_recognition", traced_node("intent_recognition", intent_recognition)
 )
-graph_builder.add_node("context_builder", traced_node("context_builder", context_builder))
 graph_builder.add_node(
-    "semantic_planning", traced_node("semantic_planning", semantic_planning)
+    "context_builder", traced_node("context_builder", context_builder)
 )
 graph_builder.add_node(
-    "context_compaction", traced_node("context_compaction", context_compaction)
+    "semantic_planning", traced_node("semantic_planning", semantic_planning)
 )
 graph_builder.add_node("generate_sql", traced_node("generate_sql", generate_sql))
 graph_builder.add_node("sql_executor", traced_node("sql_executor", sql_executor))
@@ -69,19 +67,9 @@ graph_builder.add_conditional_edges(
 )
 graph_builder.add_edge("context_builder", "semantic_planning")
 
-# Semantic planning blocks unresolved semantics; compaction can later block ambiguous joins.
+# Semantic planning blocks unresolved semantics before SQL generation.
 graph_builder.add_conditional_edges(
     source="semantic_planning",
-    path=route_after_safety_guard,
-    path_map={
-        "continue": "context_compaction",
-        "blocked": END,
-    },
-)
-
-# Compact table and metric context, then add runtime SQL context.
-graph_builder.add_conditional_edges(
-    source="context_compaction",
     path=route_after_safety_guard,
     path_map={
         "continue": "generate_sql",
@@ -124,7 +112,9 @@ if __name__ == "__main__":
                 qdrant_client_manager.client
             )
             value_es_repository = ValueESRepository(es_client_manager.client)
-            value_qdrant_repository = ValueQdrantRepository(qdrant_client_manager.client)
+            value_qdrant_repository = ValueQdrantRepository(
+                qdrant_client_manager.client
+            )
 
             # 当前只需要传入原始问题，后续节点会逐步写回召回、过滤和额外上下文结果
             state = DataAgentState(query="统计华北地区的销售总额")
@@ -152,4 +142,3 @@ if __name__ == "__main__":
         await dw_mysql_client_manager.close()
 
     asyncio.run(test())
-

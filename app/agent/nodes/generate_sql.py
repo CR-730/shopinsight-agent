@@ -10,7 +10,7 @@ from app.agent.context import DataAgentContext
 from app.agent.llm import generate_sql_llm
 from app.agent.llm_usage import ainvoke_llm_with_usage
 from app.agent.memory import format_sql_memory_examples
-from app.agent.semantic_planning.plan import SemanticQueryPlan
+from app.agent.sql.plan_projection import project_plan_for_sql
 from app.agent.state import DataAgentState
 from app.conf.app_config import app_config
 from app.core.log import logger
@@ -25,24 +25,18 @@ class GeneratedSqlResponse(BaseModel):
 
 
 async def generate_sql(state: DataAgentState, runtime: Runtime[DataAgentContext]):
-    """基于已检索和过滤的上下文生成 SQL。"""
+    """Compile a validated semantic plan into one read-only SQL statement."""
 
     writer = runtime.stream_writer
     step = "生成SQL"
     writer({"type": "progress", "step": step, "status": "running"})
 
     try:
-        sql_context = state["sql_context"]
-        table_infos = sql_context.get("tables") or []
-        metric_infos = sql_context.get("metrics") or []
         raw_plan = state.get("semantic_plan")
         if raw_plan is None:
             raise ValueError("semantic_plan is required for SQL generation")
-        semantic_plan = SemanticQueryPlan.model_validate(raw_plan).model_dump(
-            mode="json"
-        )
-        date_info = sql_context.get("date") or {}
-        db_info = sql_context.get("db") or {}
+        semantic_plan = project_plan_for_sql(raw_plan)
+        db_info = await runtime.context["dw_mysql_repository"].get_db_info()
         query = state["query"]
         sql_memory_context = (
             format_sql_memory_examples(state.get("sql_memory_examples") or []) or "无"
@@ -52,11 +46,8 @@ async def generate_sql(state: DataAgentState, runtime: Runtime[DataAgentContext]
         prompt = PromptTemplate(
             template=load_prompt("generate_sql"),
             input_variables=[
-                "table_infos",
-                "metric_infos",
                 "semantic_plan",
                 "sql_memory_context",
-                "date_info",
                 "db_info",
                 "query_for_explanation_only",
             ],
@@ -68,17 +59,10 @@ async def generate_sql(state: DataAgentState, runtime: Runtime[DataAgentContext]
             generate_sql_llm,
             parser,
             {
-                "table_infos": yaml.dump(
-                    table_infos, allow_unicode=True, sort_keys=False
-                ),
-                "metric_infos": yaml.dump(
-                    metric_infos, allow_unicode=True, sort_keys=False
-                ),
                 "semantic_plan": yaml.dump(
                     semantic_plan, allow_unicode=True, sort_keys=False
                 ),
                 "sql_memory_context": sql_memory_context,
-                "date_info": yaml.dump(date_info, allow_unicode=True, sort_keys=False),
                 "db_info": yaml.dump(db_info, allow_unicode=True, sort_keys=False),
                 "query_for_explanation_only": query,
             },

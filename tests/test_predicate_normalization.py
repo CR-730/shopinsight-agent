@@ -9,7 +9,6 @@ def _enum(operator, values, *, column_id="dim_region.region_name"):
         column_id=column_id,
         operator=operator,
         canonical_values=list(values),
-        allowed_sql_literals=list(values),
     )
 
 

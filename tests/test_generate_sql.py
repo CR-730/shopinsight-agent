@@ -34,7 +34,6 @@ def _plan():
                 "column_id": "dim_region.region_name",
                 "operator": "eq",
                 "canonical_values": ["华北地区"],
-                "allowed_sql_literals": ["华北地区"],
             }
         ],
         "order_by": [
@@ -54,6 +53,12 @@ def _plan():
             "dim_region.region_name",
             "fact_order.order_amount",
             "fact_order.region_id",
+        ],
+        "required_columns": [
+            {"column_id": "dim_region.region_id", "data_type": "bigint"},
+            {"column_id": "dim_region.region_name", "data_type": "varchar"},
+            {"column_id": "fact_order.order_amount", "data_type": "decimal"},
+            {"column_id": "fact_order.region_id", "data_type": "bigint"},
         ],
         "provenance": [],
     }
@@ -99,9 +104,16 @@ def _state():
 
 
 def _runtime():
+    class FakeDWRepository:
+        async def get_db_info(self):
+            return {"dialect": "mysql", "version": "8.0"}
+
     return SimpleNamespace(
         stream_writer=lambda event: None,
-        context={"cost_tracker": object()},
+        context={
+            "cost_tracker": object(),
+            "dw_mysql_repository": FakeDWRepository(),
+        },
     )
 
 
@@ -120,7 +132,11 @@ def _capture(monkeypatch):
         cacheable,
     ):
         captured.update(
-            {"calls": captured["calls"] + 1, "template": prompt.template, "inputs": inputs}
+            {
+                "calls": captured["calls"] + 1,
+                "template": prompt.template,
+                "inputs": inputs,
+            }
         )
         return generate_sql_module.GeneratedSqlResponse(
             sql="SELECT SUM(order_amount) AS 销售额 FROM fact_order",
@@ -142,6 +158,38 @@ def test_generate_sql_serializes_only_the_semantic_plan(monkeypatch):
 
     assert yaml.safe_load(captured["inputs"]["semantic_plan"]) == _plan()
     assert "conversation_history" not in captured["inputs"]
+    assert set(captured["inputs"]) == {
+        "semantic_plan",
+        "sql_memory_context",
+        "db_info",
+        "query_for_explanation_only",
+    }
+
+
+def test_generate_sql_exposes_only_the_selected_physical_time_literals(monkeypatch):
+    captured = _capture(monkeypatch)
+    state = _state()
+    state["semantic_plan"]["predicates"].append(
+        {
+            "kind": "temporal",
+            "column_id": "fact_order.date_id",
+            "operator": "during",
+            "start_date": "2025-01-01",
+            "end_date": "2025-03-31",
+            "start_date_id": 20250101,
+            "end_date_id": 20250331,
+            "grain": "quarter",
+        }
+    )
+
+    asyncio.run(generate_sql_module.generate_sql(state, _runtime()))
+
+    temporal = yaml.safe_load(captured["inputs"]["semantic_plan"])["predicates"][-1]
+    assert temporal["start_date_id"] == 20250101
+    assert temporal["end_date_id"] == 20250331
+    assert "start_date" not in temporal
+    assert "end_date" not in temporal
+    assert state["semantic_plan"]["predicates"][-1]["start_date"] == "2025-01-01"
 
 
 def test_generate_sql_fails_closed_without_semantic_plan(monkeypatch):
@@ -171,12 +219,18 @@ def test_prompt_requires_every_plan_component_and_forbids_new_constraints(monkey
     ):
         assert component in template
     assert "唯一查询语义来源" in template
+    assert "required_columns" in template
+    assert "data_type" in template
+    assert "不得改写、格式化或单位转换" in template
     assert "不得从用户原问题" in template
     assert "不得从历史成功 SQL" in template
     assert "聚合指标与 group_by 维度同时存在" in template
     assert "GROUP BY 不得留给修复阶段补齐" in template
     assert "join_type" in template
     assert "LEFT JOIN 的保留侧" in template
+    assert "所有行级谓词" in template
+    assert "外连接的保行语义优先于默认子句位置" in template
+    assert "numeric 的 clause=where" not in template
     assert "RIGHT、FULL 或 CROSS JOIN" in template
 
 
@@ -195,7 +249,15 @@ def test_generate_sql_receives_authoritative_metric_aggregation(monkeypatch):
 
     asyncio.run(generate_sql_module.generate_sql(_state(), _runtime()))
 
-    metric_infos = yaml.safe_load(captured["inputs"]["metric_infos"])
     semantic_plan = yaml.safe_load(captured["inputs"]["semantic_plan"])
-    assert metric_infos[0]["aggregation"] == "sum"
     assert semantic_plan["measures"][0]["aggregation"] == "sum"
+
+
+def test_prompt_does_not_repeat_compacted_schema_or_date_context(monkeypatch):
+    captured = _capture(monkeypatch)
+
+    asyncio.run(generate_sql_module.generate_sql(_state(), _runtime()))
+
+    assert "{table_infos}" not in captured["template"]
+    assert "{metric_infos}" not in captured["template"]
+    assert "{date_info}" not in captured["template"]

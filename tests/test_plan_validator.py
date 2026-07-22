@@ -139,6 +139,14 @@ def test_validator_materializes_unique_join_closure():
         "fact_order.order_amount",
         "fact_order.region_id",
     ]
+    assert {
+        item.column_id: item.data_type for item in result.plan.required_columns
+    } == {
+        "dim_region.region_id": "bigint",
+        "dim_region.region_name": "varchar",
+        "fact_order.order_amount": "decimal",
+        "fact_order.region_id": "bigint",
+    }
     assert result.plan.joins == [
         JoinPlan(
             left_column_id="dim_region.region_id",
@@ -174,7 +182,7 @@ def test_validator_applies_left_join_preference_and_direction():
     ]
 
 
-def test_validator_rejects_join_preference_outside_required_closure():
+def test_validator_ignores_inner_join_preference_outside_required_closure():
     unused = _relationship("fact_order.product_id", "dim_product.product_id")
     catalog = _catalog(
         extra_columns={
@@ -191,6 +199,33 @@ def test_validator_rejects_join_preference_outside_required_closure():
             ResolvedJoinPreference(
                 relationship_candidate_id=unused.candidate_id,
                 join_type="inner",
+            ),
+        ),
+    )
+
+    assert result.status == "resolved"
+    assert result.plan.required_table_ids == ["dim_region", "fact_order"]
+    assert len(result.plan.joins) == 1
+
+
+def test_validator_rejects_left_join_preference_outside_required_closure():
+    unused = _relationship("fact_order.product_id", "dim_product.product_id")
+    catalog = _catalog(
+        extra_columns={
+            "fact_order.product_id": _column("fact_order.product_id", "foreign_key"),
+            "dim_product.product_id": _column("dim_product.product_id", "primary_key"),
+        },
+        extra_relationships={unused.candidate_id: unused},
+    )
+
+    result = validate_plan(
+        _plan(),
+        catalog,
+        join_preferences=(
+            ResolvedJoinPreference(
+                relationship_candidate_id=unused.candidate_id,
+                join_type="left",
+                left_table_candidate_id="dim_product",
             ),
         ),
     )
@@ -229,20 +264,7 @@ def test_validator_rejects_metric_definition_tampering():
     assert result.issues[0].code == "metric_definition_mismatch"
 
 
-def test_validator_checks_enum_literals_numeric_scope_and_order_target():
-    invalid_enum = validate_plan(
-        _plan(
-            predicates=[
-                EnumPredicate(
-                    column_id="dim_region.region_name",
-                    operator="eq",
-                    canonical_values=["华北地区"],
-                    allowed_sql_literals=["华南地区"],
-                )
-            ]
-        ),
-        _catalog(),
-    )
+def test_validator_checks_numeric_scope_and_order_target():
     invalid_scope = validate_plan(
         _plan(
             predicates=[
@@ -270,7 +292,6 @@ def test_validator_checks_enum_literals_numeric_scope_and_order_target():
         _catalog(),
     )
 
-    assert invalid_enum.issues[0].code == "enum_literal_mismatch"
     assert invalid_scope.issues[0].code == "numeric_clause_mismatch"
     assert invalid_order.issues[0].code == "order_target_not_selected"
 
@@ -303,13 +324,11 @@ def test_validator_materializes_canonical_multi_value_enum_predicate():
                     column_id="dim_region.region_name",
                     operator="in",
                     canonical_values=["华北地区"],
-                    allowed_sql_literals=["华北地区"],
                 ),
                 EnumPredicate(
                     column_id="dim_region.region_name",
                     operator="in",
                     canonical_values=["华南地区"],
-                    allowed_sql_literals=["华南地区"],
                 ),
             ]
         ),
@@ -322,7 +341,6 @@ def test_validator_materializes_canonical_multi_value_enum_predicate():
             column_id="dim_region.region_name",
             operator="in",
             canonical_values=["华北地区", "华南地区"],
-            allowed_sql_literals=["华北地区", "华南地区"],
         )
     ]
 
@@ -335,13 +353,11 @@ def test_validator_blocks_conflicting_enum_predicates_before_join_resolution():
                     column_id="dim_region.region_name",
                     operator="eq",
                     canonical_values=["华北地区"],
-                    allowed_sql_literals=["华北地区"],
                 ),
                 EnumPredicate(
                     column_id="dim_region.region_name",
                     operator="eq",
                     canonical_values=["华南地区"],
-                    allowed_sql_literals=["华南地区"],
                 ),
             ]
         ),

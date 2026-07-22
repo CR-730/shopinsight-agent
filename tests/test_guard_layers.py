@@ -1,4 +1,4 @@
-﻿import asyncio
+import asyncio
 
 from app.agent.nodes import intent_recognition as intent_recognition_module
 from app.agent.nodes.intent_recognition import (
@@ -128,7 +128,9 @@ def test_intent_recognition_streams_llm_text_without_stop_marker(monkeypatch):
     failure = result["failure"]
     assert failure["stage"] == "intent_recognition"
     assert failure["disposition"] == "blocked"
-    assert failure["user_message"] == "我理解你是在问天气，但我只能处理电商经营数据查询。"
+    assert (
+        failure["user_message"] == "我理解你是在问天气，但我只能处理电商经营数据查询。"
+    )
     assert "find_error" not in text
 
 
@@ -225,33 +227,30 @@ def test_pre_sql_execution_validation_blocks_sensitive_non_key_join_condition():
 
 def test_pre_sql_execution_validation_flags_invalid_join_relationship_as_repairable():
     state = {
-        "sql_context": {"tables": [
-            {
-                "name": "fact_order",
-                "role": "fact",
-                "columns": [
-                    {"name": "region_id", "role": "foreign_key"},
-                    {"name": "product_id", "role": "foreign_key"},
-                    {"name": "order_amount", "role": "measure"},
-                ],
-            },
-            {
-                "name": "dim_region",
-                "role": "dim",
-                "columns": [
-                    {"name": "region_id", "role": "primary_key"},
-                    {"name": "region_name", "role": "dimension"},
-                ],
-            },
-            {
-                "name": "dim_product",
-                "role": "dim",
-                "columns": [
-                    {"name": "product_id", "role": "primary_key"},
-                    {"name": "category", "role": "dimension"},
-                ],
-            },
-        ]}
+        "semantic_plan": _semantic_plan(
+            joins=[
+                {
+                    "left_column_id": "fact_order.region_id",
+                    "right_column_id": "dim_region.region_id",
+                    "join_type": "inner",
+                },
+                {
+                    "left_column_id": "fact_order.product_id",
+                    "right_column_id": "dim_product.product_id",
+                    "join_type": "inner",
+                },
+            ],
+            required_table_ids=["fact_order", "dim_region", "dim_product"],
+            required_column_ids=[
+                "fact_order.region_id",
+                "fact_order.product_id",
+                "fact_order.order_amount",
+                "dim_region.region_id",
+                "dim_region.region_name",
+                "dim_product.product_id",
+                "dim_product.category",
+            ],
+        )
     }
     sql = """
     SELECT dp.category AS category, SUM(fo.order_amount) AS amount
@@ -265,31 +264,29 @@ def test_pre_sql_execution_validation_flags_invalid_join_relationship_as_repaira
     error = validate_sql_structure_semantics(state, sql)
 
     assert error == (
-        "JOIN 条件不符合元数据关系：fact_order.region_id = dim_region.region_name。"
-        "候选正确关系：fact_order.region_id = dim_region.region_id。"
+        "JOIN 条件不符合查询计划：fact_order.region_id = dim_region.region_name。"
+        "计划关系：fact_order.region_id = dim_region.region_id。"
     )
 
 
 def test_repair_invalid_join_relationship_uses_metadata_candidate():
     state = {
-        "sql_context": {"tables": [
-            {
-                "name": "fact_order",
-                "role": "fact",
-                "columns": [
-                    {"name": "region_id", "role": "foreign_key"},
-                    {"name": "order_amount", "role": "measure"},
-                ],
-            },
-            {
-                "name": "dim_region",
-                "role": "dim",
-                "columns": [
-                    {"name": "region_id", "role": "primary_key"},
-                    {"name": "region_name", "role": "dimension"},
-                ],
-            },
-        ]}
+        "semantic_plan": _semantic_plan(
+            joins=[
+                {
+                    "left_column_id": "fact_order.region_id",
+                    "right_column_id": "dim_region.region_id",
+                    "join_type": "inner",
+                }
+            ],
+            required_table_ids=["fact_order", "dim_region"],
+            required_column_ids=[
+                "fact_order.region_id",
+                "fact_order.order_amount",
+                "dim_region.region_id",
+                "dim_region.region_name",
+            ],
+        )
     }
     sql = """
     SELECT SUM(f.order_amount) AS GMV
@@ -307,18 +304,22 @@ def test_repair_invalid_join_relationship_uses_metadata_candidate():
 
 def test_pre_sql_execution_validation_allows_valid_join_relationship():
     state = {
-        "sql_context": {"tables": [
-            {
-                "name": "fact_order",
-                "role": "fact",
-                "columns": [{"name": "region_id", "role": "foreign_key"}],
-            },
-            {
-                "name": "dim_region",
-                "role": "dim",
-                "columns": [{"name": "region_id", "role": "primary_key"}],
-            },
-        ]}
+        "semantic_plan": _semantic_plan(
+            joins=[
+                {
+                    "left_column_id": "fact_order.region_id",
+                    "right_column_id": "dim_region.region_id",
+                    "join_type": "inner",
+                }
+            ],
+            required_table_ids=["fact_order", "dim_region"],
+            required_column_ids=[
+                "fact_order.region_id",
+                "fact_order.order_amount",
+                "dim_region.region_id",
+                "dim_region.region_name",
+            ],
+        )
     }
     sql = """
     SELECT dr.region_name AS region_name, SUM(fo.order_amount) AS amount
@@ -330,6 +331,35 @@ def test_pre_sql_execution_validation_allows_valid_join_relationship():
     error = validate_sql_structure_semantics(state, sql)
 
     assert error is None
+
+
+def test_empty_join_plan_never_falls_back_to_retrieval_context_for_repair():
+    state = {
+        "semantic_plan": _semantic_plan(
+            required_table_ids=["fact_order"],
+            required_column_ids=["fact_order.order_amount"],
+        ),
+        "sql_context": {
+            "tables": [
+                {
+                    "name": "fact_order",
+                    "columns": [{"name": "region_id", "role": "foreign_key"}],
+                },
+                {
+                    "name": "dim_region",
+                    "columns": [{"name": "region_id", "role": "primary_key"}],
+                },
+            ]
+        },
+    }
+    sql = """
+    SELECT SUM(f.order_amount) AS GMV
+    FROM fact_order f
+    JOIN dim_region r ON f.region_id = r.region_name
+    """
+
+    assert repair_invalid_join_relationship(state, sql) is None
+    assert "不符合查询计划" in validate_sql_structure_semantics(state, sql)
 
 
 def test_schema_relation_join_rule_matches_sql_guard_contract():
@@ -372,7 +402,6 @@ def test_sql_guard_accepts_semantic_plan_literal_without_retrieval_value():
                         "column_id": "dim_region.region_name",
                         "operator": "eq",
                         "canonical_values": ["华北"],
-                        "allowed_sql_literals": ["华北"],
                     }
                 ]
             ),

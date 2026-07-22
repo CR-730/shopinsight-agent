@@ -110,10 +110,7 @@ def test_orchestrator_exposes_only_validated_plan(monkeypatch):
         assert isinstance(kwargs["catalog"], SemanticCandidateCatalog)
         calls.append("interpret")
         return SemanticDraft(
-            source_query=query,
-            measure_mentions=[
-                MeasureMention(raw_text="销售额", candidate_ids=["GMV"])
-            ],
+            measure_mentions=[MeasureMention(raw_text="销售额", candidate_ids=["GMV"])],
         )
 
     monkeypatch.setattr(
@@ -133,7 +130,6 @@ def test_orchestrator_exposes_only_validated_plan(monkeypatch):
 def test_blocked_orchestrator_returns_failure_without_plan(monkeypatch):
     async def interpret(query, runtime, **kwargs):
         return SemanticDraft(
-            source_query=query,
             ambiguity_reports=[
                 AmbiguityReport(
                     raw_text="销售额",
@@ -180,15 +176,18 @@ def test_phase_three_activates_new_orchestrator_without_writing_legacy_state():
 
     assert "build_semantic_plan" in source
     assert "semantic_draft" not in source
-    assert ("business_" + "binding") not in state_module.DataAgentState.__optional_keys__
+    assert (
+        "business_" + "binding"
+    ) not in state_module.DataAgentState.__optional_keys__
 
 
 def test_history_is_trusted_only_for_explicit_short_followups():
     history = "user: 按地区看销售额"
 
-    assert orchestrator._trusted_sources(
-        "继续", conversation_history=history
-    ) == ("继续", history)
+    assert orchestrator._trusted_sources("继续", conversation_history=history) == (
+        "继续",
+        history,
+    )
     assert orchestrator._trusted_sources(
         "查询华东销售额", conversation_history=history
     ) == ("查询华东销售额",)

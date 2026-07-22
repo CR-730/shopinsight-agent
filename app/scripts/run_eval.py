@@ -353,12 +353,6 @@ def _infer_exception_stage(exc: Exception) -> str:
         or "recall_metric_context" in text
     ):
         return "rag_recall"
-    if (
-        "context_compaction" in text
-        or "compile_context_from_plan" in text
-        or "add_runtime_context" in text
-    ):
-        return "context_filter"
     if "generate_sql" in text:
         return "sql_generation"
     if "sql_correction" in text or "correct_sql_candidate" in text:

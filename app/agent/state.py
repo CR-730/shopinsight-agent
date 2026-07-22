@@ -45,21 +45,6 @@ class TableInfoState(TypedDict, total=False):
     columns: list[ColumnInfoState]
 
 
-class DateInfoState(TypedDict):
-    """当前日期上下文。"""
-
-    date: str
-    weekday: str
-    quarter: str
-
-
-class DBInfoState(TypedDict):
-    """数据库方言和版本上下文。"""
-
-    dialect: str
-    version: str
-
-
 class MessageState(TypedDict, total=False):
     """会话历史中的原始消息。"""
 
@@ -85,12 +70,10 @@ class RetrievalContextState(TypedDict, total=False):
 
 
 class SqlContextState(TypedDict, total=False):
-    """SQL 生成和修正阶段使用的上下文。"""
+    """检索合并后供语义规划构建候选目录的上下文。"""
 
     tables: list[TableInfoState]
     metrics: list[MetricInfoState]
-    date: DateInfoState
-    db: DBInfoState
 
 
 class TraceState(TypedDict, total=False):
@@ -150,7 +133,7 @@ class DataAgentState(TypedDict, total=False):
     retrieval_context: RetrievalContextState
     trace: TraceState
 
-    # SQL 生成上下文
+    # 检索合并上下文与可信语义计划
     sql_context: SqlContextState
     semantic_plan: NotRequired[dict[str, Any]]
 

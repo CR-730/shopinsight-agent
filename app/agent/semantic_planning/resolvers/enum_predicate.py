@@ -3,12 +3,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import Literal
 
-from app.agent.semantic_planning.catalog import (
-    ColumnCandidate,
-    SemanticCandidateCatalog,
-)
+from app.agent.semantic_planning.catalog import SemanticCandidateCatalog
 from app.agent.semantic_planning.draft import EnumPredicateMention
 from app.agent.semantic_planning.issues import PlanningIssue
 from app.agent.semantic_planning.plan import EnumPredicate
@@ -19,7 +16,6 @@ EnumResolutionStatus = Literal["resolved", "unresolved", "ambiguous", "failed"]
 @dataclass(frozen=True)
 class EnumResolutionContext:
     catalog: SemanticCandidateCatalog
-    dw_repository: Any
     trusted_sources: tuple[str, ...]
 
 
@@ -80,58 +76,14 @@ async def _resolve_catalog_values(
             "unresolved", "duplicate_value_candidate", mention, value_ids
         )
 
-    column = context.catalog.column_by_id(column_id)
-    for value in values:
-        if value.source != "meta_alias":
-            continue
-        verified = await _exact_value_exists(
-            column,
-            value.canonical_value,
-            mention,
-            value_ids,
-            context,
-        )
-        if isinstance(verified, EnumPredicateResolution):
-            return verified
-
     return EnumPredicateResolution(
         status="resolved",
         plan=EnumPredicate(
             column_id=column_id,
             operator=mention.operator_intent,
             canonical_values=canonical_values,
-            allowed_sql_literals=list(canonical_values),
         ),
     )
-
-
-async def _exact_value_exists(
-    column: ColumnCandidate,
-    value: str,
-    mention: EnumPredicateMention,
-    candidate_ids: list[str],
-    context: EnumResolutionContext,
-) -> bool | EnumPredicateResolution:
-    try:
-        exists = await context.dw_repository.column_value_exists(
-            column.table, column.name, value
-        )
-    except Exception as exc:
-        return EnumPredicateResolution(
-            status="failed",
-            issue=PlanningIssue(
-                phase="system",
-                code="dw_value_lookup_failed",
-                source_span=mention.raw_text,
-                candidate_ids=candidate_ids,
-                details={"error_type": exc.__class__.__name__},
-            ),
-        )
-    if not exists:
-        return _blocked(
-            "unresolved", "value_not_found", mention, candidate_ids
-        )
-    return True
 
 
 def _blocked(
