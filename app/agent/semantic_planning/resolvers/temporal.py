@@ -16,15 +16,12 @@ from app.agent.semantic_planning.time_adapter import (
     parse_time_span,
 )
 
-TemporalResolutionStatus = Literal[
-    "resolved", "unresolved", "ambiguous", "failed"
-]
+TemporalResolutionStatus = Literal["resolved", "unresolved", "ambiguous", "failed"]
 
 
 @dataclass(frozen=True)
 class TemporalResolutionContext:
     catalog: SemanticCandidateCatalog
-    trusted_sources: tuple[str, ...]
     reference_date: date
     temporal_column_id: str
 
@@ -40,10 +37,6 @@ def resolve_temporal_predicate(
     mention: TemporalPredicateMention,
     context: TemporalResolutionContext,
 ) -> TemporalPredicateResolution:
-    if not mention.raw_text or not any(
-        mention.raw_text in source for source in context.trusted_sources
-    ):
-        return _blocked("unresolved", "untrusted_source_span", mention)
     if context.temporal_column_id not in context.catalog.columns:
         return _blocked(
             "unresolved",
@@ -52,9 +45,7 @@ def resolve_temporal_predicate(
             [context.temporal_column_id],
         )
     if any(marker in mention.raw_text for marker in ("同比", "环比")):
-        return _blocked(
-            "unresolved", "temporal_comparison_unsupported", mention
-        )
+        return _blocked("unresolved", "temporal_comparison_unsupported", mention)
 
     try:
         parsed = parse_time_span(

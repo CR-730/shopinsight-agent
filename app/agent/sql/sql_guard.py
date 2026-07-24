@@ -1,4 +1,4 @@
-"""Shared SQL normalization, validation, and deterministic repair helpers."""
+"""Shared SQL normalization and validation helpers."""
 
 import re
 from typing import Any
@@ -9,6 +9,15 @@ from sqlglot.errors import ParseError
 
 from app.agent.semantic_planning.plan import EnumPredicate, SemanticQueryPlan
 from app.conf.policy_config import load_policy_config
+
+
+class SqlGuardError(str):
+    """String-compatible guard error with an explicit classification."""
+
+    def __new__(cls, message: str, kind: str):
+        value = super().__new__(cls, message)
+        value.kind = kind
+        return value
 
 
 def normalize_sql_for_execution(sql: str) -> str:
@@ -42,7 +51,7 @@ def validate_sql_before_execution(state: dict[str, Any], sql: str) -> str | None
     lowered_query = (state.get("query") or "").lower()
     parsed_sql = _parse_single_select(normalized_sql)
     if isinstance(parsed_sql, str):
-        return parsed_sql
+        return SqlGuardError(parsed_sql, "parse_error")
 
     expression = parsed_sql
 
@@ -77,100 +86,6 @@ def validate_sql_structure_semantics(
     if isinstance(parsed_sql, str):
         return parsed_sql
     return _invalid_join_relationship(state, parsed_sql)
-
-
-def repair_invalid_join_relationship(
-    state: dict[str, Any],
-    sql: str,
-) -> str | None:
-    """Repair a join predicate when the trusted plan has one matching edge."""
-
-    parsed_sql = _parse_single_select(sql.strip())
-    if isinstance(parsed_sql, str):
-        return None
-
-    alias_to_table = _table_aliases(parsed_sql)
-    table_refs = _preferred_table_refs(alias_to_table)
-    planned_joins = _planned_joins(state)
-    if planned_joins is not None:
-        for join in parsed_sql.find_all(exp.Join):
-            condition = join.args.get("on")
-            if condition is None:
-                continue
-            for predicate in condition.find_all(exp.EQ):
-                if not isinstance(predicate.left, exp.Column) or not isinstance(
-                    predicate.right, exp.Column
-                ):
-                    continue
-                left_id = _resolved_column_id(predicate.left, alias_to_table)
-                right_id = _resolved_column_id(predicate.right, alias_to_table)
-                if left_id is None or right_id is None:
-                    continue
-                if _is_planned_join(left_id, right_id, planned_joins):
-                    continue
-                candidate = _planned_join_for_tables(left_id, right_id, planned_joins)
-                if candidate is None:
-                    continue
-                left_expected, right_expected = candidate
-                left_table, left_name = left_expected.rsplit(".", 1)
-                right_table, right_name = right_expected.rsplit(".", 1)
-                predicate.set(
-                    "this",
-                    exp.column(
-                        left_name,
-                        table=table_refs.get(left_table, left_table),
-                    ),
-                )
-                predicate.set(
-                    "expression",
-                    exp.column(
-                        right_name,
-                        table=table_refs.get(right_table, right_table),
-                    ),
-                )
-                return parsed_sql.sql(dialect="mysql")
-        return None
-
-    column_catalog = _column_catalog(state)
-    if not column_catalog:
-        return None
-
-    for join in parsed_sql.find_all(exp.Join):
-        condition = join.args.get("on")
-        if condition is None:
-            continue
-        for predicate in condition.find_all(exp.EQ):
-            if not isinstance(predicate.left, exp.Column) or not isinstance(
-                predicate.right, exp.Column
-            ):
-                continue
-            left = _resolved_column(predicate.left, alias_to_table, column_catalog)
-            right = _resolved_column(predicate.right, alias_to_table, column_catalog)
-            if left is None or right is None or left["table"] == right["table"]:
-                continue
-            if _is_valid_join_pair(left, right):
-                continue
-
-            candidate = _candidate_join_pair(left, right, column_catalog)
-            if candidate is None:
-                continue
-            foreign_key, primary_key = candidate
-            predicate.set(
-                "this",
-                exp.column(
-                    foreign_key["name"],
-                    table=table_refs.get(foreign_key["table"], foreign_key["table"]),
-                ),
-            )
-            predicate.set(
-                "expression",
-                exp.column(
-                    primary_key["name"],
-                    table=table_refs.get(primary_key["table"], primary_key["table"]),
-                ),
-            )
-            return parsed_sql.sql(dialect="mysql")
-    return None
 
 
 def _parse_single_select(sql: str) -> exp.Expression | str:
@@ -311,15 +226,6 @@ def _table_aliases(expression: exp.Expression) -> dict[str, str]:
     return aliases
 
 
-def _preferred_table_refs(alias_to_table: dict[str, str]) -> dict[str, str]:
-    refs: dict[str, str] = {}
-    for table_ref, table_name in alias_to_table.items():
-        refs.setdefault(table_name, table_ref)
-        if table_ref != table_name:
-            refs[table_name] = table_ref
-    return refs
-
-
 def _column_catalog(state: dict[str, Any]) -> dict[str, dict[str, str]]:
     catalog: dict[str, dict[str, str]] = {}
     for table in (state.get("sql_context") or {}).get("tables") or []:
@@ -441,6 +347,8 @@ def _sensitive_column(expression: exp.Expression) -> str | None:
     for column in expression.find_all(exp.Column):
         if _is_allowed_sensitive_join_key(column, allowed_join_key_names):
             continue
+        if _is_counted_sensitive_identifier(column):
+            continue
         sensitive = _sensitive_column_name(
             column, sensitive_column_ids, sensitive_names
         )
@@ -462,6 +370,17 @@ def _is_allowed_sensitive_join_key(
             return condition is not None and any(
                 candidate is column for candidate in condition.find_all(exp.Column)
             )
+        node = node.parent
+    return False
+
+
+def _is_counted_sensitive_identifier(column: exp.Column) -> bool:
+    node = column.parent
+    while node is not None:
+        if isinstance(node, exp.Count):
+            return True
+        if isinstance(node, (exp.Select, exp.Where, exp.Group, exp.Having, exp.Join)):
+            return False
         node = node.parent
     return False
 

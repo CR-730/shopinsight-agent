@@ -32,7 +32,6 @@ _NUMERIC_TYPES = (
 @dataclass(frozen=True)
 class NumericResolutionContext:
     catalog: SemanticCandidateCatalog
-    trusted_sources: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -51,7 +50,6 @@ def resolve_numeric_predicate(
         raw_text=mention.raw_text,
         candidate_ids=mention.target_candidate_ids,
         catalog=targets,
-        trusted_sources=context.trusted_sources,
         issue_prefix="numeric_target",
     )
     if selection.status != "resolved":
@@ -83,12 +81,6 @@ def resolve_numeric_predicate(
 
     normalized_values: list[tuple[Decimal, str]] = []
     for value_text in mention.value_texts:
-        if value_text not in mention.raw_text or not any(
-            value_text in source for source in context.trusted_sources
-        ):
-            return _blocked(
-                "untrusted_numeric_span", mention, mention.target_candidate_ids
-            )
         if any(unit in value_text for unit in ("万", "亿", "%", "％")):
             return _blocked(
                 "numeric_unit_not_declared", mention, mention.target_candidate_ids

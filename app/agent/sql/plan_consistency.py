@@ -489,7 +489,7 @@ def _compare_limit(expression, plan, differences):
     if limit is not None and isinstance(limit.expression, exp.Literal):
         try:
             actual = int(limit.expression.this)
-        except TypeError, ValueError:
+        except (TypeError, ValueError):
             actual = str(limit.expression.this)
     if plan.limit != actual:
         differences.append(_difference("limit_mismatch", "limit", plan.limit, actual))
@@ -833,7 +833,7 @@ def _literal(node) -> str:
 def _number(value: str) -> str:
     try:
         return canonical_number(value)
-    except InvalidOperation, ValueError:
+    except (InvalidOperation, ValueError):
         return str(value)
 
 

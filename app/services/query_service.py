@@ -24,7 +24,6 @@ from app.agent.llm_usage import (
 )
 from app.agent.memory import (
     Message,
-    build_retrieval_query,
     build_sql_tool_memory,
     messages_to_state,
 )
@@ -92,7 +91,6 @@ class QueryService:
             user_id=user_id,
         )
         conversation_messages = messages_to_state(conversation.messages)
-        memory_query = build_retrieval_query(query, conversation_messages)
 
         yield _sse(
             {
@@ -172,7 +170,6 @@ class QueryService:
                 await self._save_memory_after_query(
                     conversation=conversation,
                     query=query,
-                    memory_query=memory_query,
                     metadata_cache_version=metadata_cache_version,
                     final_state=final_state,
                     assistant_content="".join(assistant_text_parts).strip(),
@@ -186,7 +183,6 @@ class QueryService:
             await self._save_memory_after_query(
                 conversation=conversation,
                 query=query,
-                memory_query=memory_query,
                 metadata_cache_version=metadata_cache_version,
                 final_state={
                     "failure": build_failure(
@@ -245,7 +241,6 @@ class QueryService:
         self,
         conversation,
         query: str,
-        memory_query: str,
         metadata_cache_version: str,
         final_state: dict,
         assistant_content: str = "",
@@ -260,7 +255,8 @@ class QueryService:
         )
         await self.agent_memory_repository.update_conversation(conversation)
 
-        tool_memory = build_sql_tool_memory(memory_query, final_state)
+        effective_query = str(final_state.get("query") or query)
+        tool_memory = build_sql_tool_memory(effective_query, final_state)
         if tool_memory and conversation.user_id != "anonymous":
             await self.agent_memory_repository.save_tool_usage(
                 question=tool_memory.question,

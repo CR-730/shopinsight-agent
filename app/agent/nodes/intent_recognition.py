@@ -11,6 +11,7 @@ from app.agent.context import DataAgentContext
 from app.agent.failure import build_failure
 from app.agent.llm import llm
 from app.agent.llm_usage import ainvoke_llm_with_usage
+from app.agent.memory import sliding_conversation_history
 from app.agent.state import DataAgentState
 from app.conf.app_config import app_config
 from app.core.log import logger
@@ -18,7 +19,7 @@ from app.prompt.prompt_loader import load_prompt
 
 
 class InputGuardDecision(BaseModel):
-    """Minimal pre-retrieval routing decision returned by the LLM guard."""
+    """Pre-retrieval safety decision and query rewrite returned by the LLM."""
 
     decision: Literal["allow", "block"] = Field(
         description="Allow the query to continue or block it before retrieval."
@@ -32,6 +33,10 @@ class InputGuardDecision(BaseModel):
         "privacy_detail",
         "system_leak",
     ] = Field(description="The single routing category supporting the decision.")
+    rewritten_query: str = Field(
+        default="",
+        description="A standalone Chinese data question; required only when allowed.",
+    )
     user_message: str = Field(
         default="",
         description="A concise Chinese clarification or refusal; empty when allowed.",
@@ -45,6 +50,10 @@ class InputGuardDecision(BaseModel):
             raise ValueError("block decision requires a blocking category")
         if self.decision == "block" and not self.user_message.strip():
             raise ValueError("block decision requires user_message")
+        if self.decision == "allow" and not self.rewritten_query.strip():
+            raise ValueError("allow decision requires rewritten_query")
+        if self.decision == "block" and self.rewritten_query.strip():
+            raise ValueError("block decision requires an empty rewritten_query")
         return self
 
 
@@ -62,7 +71,14 @@ async def intent_recognition(
     writer({"type": "progress", "step": step, "status": "running"})
 
     query = state.get("query") or ""
-    classifier_result = await classify_query_intent(query, runtime)
+    conversation_history = _user_conversation_history(
+        state.get("conversation_messages") or []
+    )
+    classifier_result = await classify_query_intent(
+        query,
+        runtime,
+        conversation_history=conversation_history,
+    )
     if _is_block_decision(classifier_result):
         category = str(classifier_result.get("category") or "input_blocked")
         user_facing_message = str(
@@ -91,16 +107,22 @@ async def intent_recognition(
         }
 
     writer({"type": "progress", "step": step, "status": "success"})
-    return {"failure": None}
+    return {
+        "query": str(classifier_result.get("rewritten_query") or "").strip(),
+        "failure": None,
+    }
 
 
 async def classify_query_intent(
-    query: str, runtime: Runtime[DataAgentContext]
+    query: str,
+    runtime: Runtime[DataAgentContext],
+    *,
+    conversation_history: str = "",
 ) -> dict[str, Any]:
     parser = PydanticOutputParser(pydantic_object=InputGuardDecision)
     prompt = PromptTemplate(
         template=load_prompt("pre_rag_guard"),
-        input_variables=["query"],
+        input_variables=["query", "conversation_history"],
         partial_variables={"format_instructions": parser.get_format_instructions()},
     )
     try:
@@ -108,7 +130,10 @@ async def classify_query_intent(
             prompt,
             llm,
             parser,
-            {"query": query},
+            {
+                "query": query,
+                "conversation_history": conversation_history or "无",
+            },
             "意图识别",
             runtime.context["cost_tracker"],
             app_config.llm.timeout_seconds,
@@ -122,6 +147,7 @@ async def classify_query_intent(
         return {
             "decision": "block",
             "category": "classifier_error",
+            "rewritten_query": "",
             "user_message": (
                 "我现在没能可靠判断这个问题是否可以进入问数流程，请稍后再试。"
             ),
@@ -134,6 +160,15 @@ def _is_block_decision(result: dict[str, Any]) -> bool:
 
 def _ablation_options(context: dict[str, Any]) -> dict[str, Any]:
     return dict(context.get("ablation_options") or {})
+
+
+def _user_conversation_history(messages: list[dict[str, Any]]) -> str:
+    user_messages = [
+        message
+        for message in messages
+        if str(message.get("role") or "").casefold() == "user"
+    ]
+    return sliding_conversation_history(user_messages)
 
 
 def _write_answer_delta(writer, text: str) -> None:

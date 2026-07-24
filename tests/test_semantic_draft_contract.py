@@ -46,7 +46,7 @@ def test_draft_accepts_only_llm_owned_semantic_evidence():
                     "direction": "desc",
                 }
             ],
-            "limit_mentions": [{"raw_text": "前5名"}],
+            "limit_mentions": [{"raw_text": "前5名", "value": 5}],
             "ambiguity_reports": [],
         }
     )
@@ -167,9 +167,13 @@ def test_enum_draft_rejects_redundant_column_candidate_ids():
         )
 
 
-def test_limit_keeps_only_the_raw_span():
-    mention = LimitMention(raw_text="前五名")
-    assert mention.model_dump() == {"raw_text": "前五名"}
+def test_limit_contains_model_normalized_integer():
+    mention = LimitMention(raw_text="前五名", value=5)
+    assert mention.model_dump() == {"raw_text": "前五名", "value": 5}
 
     with pytest.raises(ValidationError):
-        LimitMention(raw_text="前五名", value=5)
+        LimitMention(raw_text="前五名")
+    with pytest.raises(ValidationError):
+        LimitMention(raw_text="前五名", value="5")
+    with pytest.raises(ValidationError):
+        LimitMention(raw_text="第一名", value=True)

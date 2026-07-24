@@ -9,7 +9,7 @@ from typing import Any
 from langchain_core.output_parsers import JsonOutputParser
 from langchain_core.prompts import PromptTemplate
 
-from app.agent.llm import llm
+from app.agent.llm import semantic_planning_llm
 from app.agent.llm_usage import ainvoke_llm_with_usage
 from app.agent.semantic_planning.catalog import SemanticCandidateCatalog
 from app.agent.semantic_planning.draft import (
@@ -26,7 +26,6 @@ async def interpret_semantics(
     query: str,
     runtime,
     *,
-    conversation_history: str,
     catalog: SemanticCandidateCatalog,
 ) -> SemanticDraft:
     """Interpret user semantics once without producing canonical backend facts."""
@@ -34,17 +33,16 @@ async def interpret_semantics(
     parser = JsonOutputParser(pydantic_object=SemanticDraft)
     prompt = PromptTemplate(
         template=load_prompt("semantic_planning"),
-        input_variables=["query", "conversation_history", "catalog_json"],
+        input_variables=["query", "catalog_json"],
         partial_variables={"format_instructions": parser.get_format_instructions()},
     )
     try:
         raw_draft = await ainvoke_llm_with_usage(
             prompt,
-            llm,
+            semantic_planning_llm,
             parser,
             {
                 "query": query,
-                "conversation_history": conversation_history or "无",
                 "catalog_json": _serialize_catalog_for_prompt(catalog),
             },
             "语义理解",
@@ -59,7 +57,7 @@ async def interpret_semantics(
             if isinstance(raw_draft, SemanticDraft)
             else SemanticDraft.model_validate(_sanitize_draft_payload(raw_draft))
         )
-        return _drop_temporal_filter_dimensions(draft, query)
+        return draft
     except Exception as exc:
         logger.warning(f"语义理解结构化输出失败，保留显式证据并阻断执行: {exc}")
         fallback = fallback_semantic_draft(query=query, catalog=catalog)
@@ -207,7 +205,9 @@ def _sanitize_draft_payload(payload: Any) -> dict[str, Any]:
             value.get("order_mentions"),
             {"raw_text", "target_candidate_ids", "direction"},
         ),
-        "limit_mentions": _allowlist_items(value.get("limit_mentions"), {"raw_text"}),
+        "limit_mentions": _allowlist_items(
+            value.get("limit_mentions"), {"raw_text", "value"}
+        ),
         "join_mentions": _allowlist_items(
             value.get("join_mentions"),
             {
@@ -251,28 +251,6 @@ def _allowlist_items(items: Any, allowed: set[str]) -> list[dict[str, Any]]:
         for item in items or []
         if isinstance(item, dict)
     ]
-
-
-def _drop_temporal_filter_dimensions(
-    draft: SemanticDraft,
-    query: str,
-) -> SemanticDraft:
-    temporal_spans = [
-        item.raw_text for item in draft.predicate_mentions if item.kind == "temporal"
-    ]
-    dimensions = [
-        item
-        for item in draft.dimension_mentions
-        if not (
-            any(item.raw_text and item.raw_text in span for span in temporal_spans)
-            and not _has_explicit_group_cue(query, item.raw_text)
-        )
-    ]
-    return draft.model_copy(update={"dimension_mentions": dimensions})
-
-
-def _has_explicit_group_cue(query: str, raw_text: str) -> bool:
-    return any(f"{prefix}{raw_text}" in query for prefix in ("按", "各", "每"))
 
 
 def _collect_exact_matches(

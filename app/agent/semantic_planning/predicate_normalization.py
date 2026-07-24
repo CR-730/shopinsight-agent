@@ -146,7 +146,7 @@ def _enum(column_id: str, operator: str, values: tuple[str, ...]) -> EnumPredica
 def _normalize_numeric_values(predicate: NumericPredicate) -> NumericPredicate:
     try:
         values = [canonical_number(value) for value in predicate.values]
-    except InvalidOperation, ValueError:
+    except (InvalidOperation, ValueError):
         return predicate
     return predicate.model_copy(update={"values": values})
 
@@ -177,7 +177,7 @@ def _numeric_group_conflict(
             for item in predicates
             if item.operator == "eq" and len(item.values) == 1
         }
-    except InvalidOperation, ValueError:
+    except (InvalidOperation, ValueError):
         return None
     if len(equals) > 1:
         return _conflict(target_id, "numeric_eq_conflict")
@@ -197,7 +197,7 @@ def _numeric_group_conflict(
             elif item.operator == "between" and len(item.values) == 2:
                 lower_bounds.append((_finite_decimal(item.values[0]), True))
                 upper_bounds.append((_finite_decimal(item.values[1]), True))
-    except InvalidOperation, ValueError:
+    except (InvalidOperation, ValueError):
         return None
 
     lower = max(lower_bounds, default=None, key=lambda item: (item[0], not item[1]))

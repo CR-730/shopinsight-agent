@@ -9,7 +9,7 @@ from app.agent.sql.plan_consistency import (
     SqlPlanConsistencyResult,
     SqlPlanDifference,
 )
-from app.agent.sql.sql_guard import normalize_sql_for_execution
+from app.agent.sql.sql_guard import SqlGuardError, normalize_sql_for_execution
 
 executor_core = importlib.import_module("app.agent.sql.sql_executor")
 correction = importlib.import_module("app.agent.sql.sql_correction")
@@ -88,10 +88,6 @@ def _runtime(repository):
 
 
 def _install_downstream(monkeypatch, calls, *, safety_error=None):
-    def structure(state, sql):
-        calls.append("structure")
-        return None
-
     def safety(state, sql):
         calls.append("safety")
         return safety_error
@@ -99,9 +95,8 @@ def _install_downstream(monkeypatch, calls, *, safety_error=None):
     async def analyze(query, rows, runtime):
         return ""
 
-    monkeypatch.setattr(executor_core, "validate_sql_structure_semantics", structure)
-    monkeypatch.setattr(executor_core, "validate_sql_before_execution", safety)
     monkeypatch.setattr(node, "_analyze_result", analyze)
+    monkeypatch.setattr(node, "validate_sql_before_execution", safety)
 
 
 def _pass_result():
@@ -122,7 +117,7 @@ def _mismatch_result(code="temporal_predicate_missing"):
     )
 
 
-def test_plan_consistency_runs_before_explain_and_safety(monkeypatch):
+def test_safety_runs_before_plan_consistency_and_database_validation(monkeypatch):
     calls = []
     repository = RecordingRepository(calls)
     _install_downstream(monkeypatch, calls)
@@ -139,10 +134,9 @@ def test_plan_consistency_runs_before_explain_and_safety(monkeypatch):
 
     assert result["failure"] is None
     assert calls == [
-        "plan_consistency",
-        "structure",
-        "explain",
         "safety",
+        "plan_consistency",
+        "explain",
         "execute",
     ]
 
@@ -197,7 +191,13 @@ def test_repaired_sql_rechecks_full_validation_chain(monkeypatch):
     result = asyncio.run(node.sql_executor(_state(bad_sql), _runtime(repository)))
 
     assert result["failure"] is None
-    assert calls == ["repair", "structure", "explain", "safety", "execute"]
+    assert calls == [
+        "safety",
+        "repair",
+        "safety",
+        "explain",
+        "execute",
+    ]
 
 
 def test_repeated_plan_mismatch_exhausts_without_execution(monkeypatch):
@@ -304,7 +304,7 @@ def test_missing_time_is_repaired_before_explain(monkeypatch):
 
     assert result["failure"] is None
     assert seen == ["temporal_predicate_missing"]
-    assert calls == ["structure", "explain", "safety", "execute"]
+    assert calls == ["safety", "safety", "explain", "execute"]
 
 
 def test_reversed_sort_is_repaired_before_execution(monkeypatch):
@@ -426,7 +426,25 @@ def test_safety_block_remains_blocked_not_repairable(monkeypatch):
 
     assert result["failure"]["code"] == "sql_safety_blocked"
     assert corrections == []
+    assert calls == ["safety"]
     assert repository.ran_sql == []
+
+
+def test_parse_error_is_repairable_not_safety_block(monkeypatch):
+    monkeypatch.setattr(
+        node,
+        "validate_sql_before_execution",
+        lambda *_: SqlGuardError("parse failed", "parse_error"),
+    )
+
+    result = asyncio.run(node._pre_validate_sql(_state("SELECT ("), SqlExecutorStub()))
+
+    assert result["status"] == "repairable_error"
+    assert result["validation_error"] == "parse failed"
+
+
+class SqlExecutorStub:
+    pass
 
 
 def test_correction_model_receives_only_plan_tables_sql_and_differences(monkeypatch):
@@ -437,7 +455,12 @@ def test_correction_model_receives_only_plan_tables_sql_and_differences(monkeypa
         captured["inputs"] = inputs
         return GOOD_SQL
 
-    monkeypatch.setattr(correction, "repair_invalid_join_relationship", lambda *_: None)
+    monkeypatch.setattr(
+        correction,
+        "repair_invalid_join_relationship",
+        lambda *_: "SELECT 1 AS deterministic_join_patch",
+        raising=False,
+    )
     monkeypatch.setattr(correction, "ainvoke_llm_with_usage", invoke)
     state = _state("SELECT 1")
     state["conversation_history"] = [{"role": "user", "content": "不可信历史"}]

@@ -37,21 +37,26 @@ def test_context_builder_returns_structured_context_and_trace(monkeypatch):
             ]
         }
 
-    async def fake_extract_retrieval_keywords(state):
-        return {"keywords": ["GMV"]}
-
     async def fake_recall_column_context(state, context):
-        return {"retrieved_column_infos": ["column"]}
+        return {
+            "retrieved_column_infos": ["column"],
+            "column_retrieval_queries": ["统计 GMV", "地区"],
+        }
 
     async def fake_recall_value_context(state, context):
-        return {"retrieved_value_infos": ["value"]}
+        return {
+            "retrieved_value_infos": ["value"],
+            "value_retrieval_queries": ["统计 GMV", "华北"],
+        }
 
     async def fake_recall_metric_context(state, context):
-        return {"retrieved_metric_infos": ["metric"]}
+        return {
+            "retrieved_metric_infos": ["metric"],
+            "metric_retrieval_queries": ["统计 GMV", "成交额"],
+        }
 
     async def fake_merge_retrieved_context(state, context):
         assert state["sql_memory_examples"][0]["sql"] == "select 1"
-        assert state["keywords"] == ["GMV"]
         assert state["retrieved_column_infos"] == ["column"]
         assert state["retrieved_value_infos"] == ["value"]
         assert state["retrieved_metric_infos"] == ["metric"]
@@ -61,11 +66,6 @@ def test_context_builder_returns_structured_context_and_trace(monkeypatch):
         context_builder_module,
         "recall_sql_memory_context",
         fake_recall_sql_memory_context,
-    )
-    monkeypatch.setattr(
-        context_builder_module,
-        "extract_retrieval_keywords",
-        fake_extract_retrieval_keywords,
     )
     monkeypatch.setattr(
         context_builder_module, "recall_column_context", fake_recall_column_context
@@ -102,7 +102,12 @@ def test_context_builder_returns_structured_context_and_trace(monkeypatch):
         },
         "sql_context": {"tables": ["table"], "metrics": ["metric_info"]},
         "trace": {
-            "keywords": ["GMV"],
+            "keywords": ["统计 GMV", "地区", "华北", "成交额"],
+            "retrieval_queries": {
+                "columns": ["统计 GMV", "地区"],
+                "metrics": ["统计 GMV", "成交额"],
+                "values": ["统计 GMV", "华北"],
+            },
             "retrieved_columns": ["column"],
             "retrieved_metrics": ["metric"],
             "retrieved_values": ["value"],

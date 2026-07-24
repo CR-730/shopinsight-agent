@@ -9,10 +9,11 @@ from app.evaluation.cases import load_eval_cases
 from app.prompt.prompt_loader import load_prompt
 
 
-def test_input_guard_decision_has_only_minimal_routing_fields():
+def test_input_guard_decision_includes_the_rewritten_query_contract():
     assert set(InputGuardDecision.model_fields) == {
         "decision",
         "category",
+        "rewritten_query",
         "user_message",
     }
 
@@ -21,10 +22,17 @@ def test_input_guard_decision_has_only_minimal_routing_fields():
     "payload",
     [
         {"decision": "allow", "category": "missing_query_object", "user_message": ""},
+        {
+            "decision": "allow",
+            "category": "safe",
+            "rewritten_query": "",
+            "user_message": "",
+        },
         {"decision": "block", "category": "safe", "user_message": "不能处理"},
         {
             "decision": "block",
             "category": "clearly_non_data",
+            "rewritten_query": "统计销售额",
             "user_message": "",
         },
     ],
@@ -37,7 +45,7 @@ def test_input_guard_decision_rejects_contradictory_outputs(payload):
 def test_input_guard_prompt_uses_a_grounded_professional_role():
     prompt = load_prompt("pre_rag_guard")
 
-    assert "企业数据安全分析师" in prompt
+    assert "企业经营数据分析师" in prompt
     assert "电商问数系统检索前的粗粒度输入守卫" not in prompt
     assert "后续流程" not in prompt
     assert "语义规划" not in prompt
@@ -46,22 +54,26 @@ def test_input_guard_prompt_uses_a_grounded_professional_role():
 def test_input_guard_prompt_distinguishes_missing_target_from_unknown_business_term():
     prompt = load_prompt("pre_rag_guard")
 
-    assert "不能因为无法确认某个词是否存在于数据库中而拒绝" in prompt
-    assert "统计成交额" in prompt
+    assert "不要判断术语、指标、字段或取值是否真实存在" in prompt
+    assert "按地区统计销售额" in prompt
     assert "查一下数据" in prompt
 
 
 def test_input_guard_prompt_renders_without_treating_json_examples_as_variables():
     prompt = PromptTemplate(
         template=load_prompt("pre_rag_guard"),
-        input_variables=["query"],
-        partial_variables={"format_instructions": "只输出三个字段"},
+        input_variables=["query", "conversation_history"],
+        partial_variables={"format_instructions": "只输出四个字段"},
     )
 
-    rendered = prompt.format(query="统计成交额")
+    rendered = prompt.format(
+        query="改成华南",
+        conversation_history="user: 按地区统计销售额",
+    )
 
     assert '"decision":"allow"' in rendered
-    assert "统计成交额" in rendered
+    assert "改成华南" in rendered
+    assert "按地区统计销售额" in rendered
 
 
 def test_real_input_guard_regression_keeps_turnover_query_and_oracle():

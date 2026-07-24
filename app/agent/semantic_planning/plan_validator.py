@@ -140,12 +140,31 @@ def validate_plan(
         issues.append(_issue("limit_out_of_range"))
 
     _validate_relationship_records(catalog, issues)
+    required_relationships = []
+    for preference in join_preferences:
+        relationship = catalog.relationships.get(preference.relationship_candidate_id)
+        if relationship is None:
+            issues.append(
+                _issue(
+                    "invalid_candidate_id",
+                    [preference.relationship_candidate_id],
+                )
+            )
+            continue
+        required_relationships.append(relationship)
     if issues:
         return SemanticPlanningResult(status="unresolved", issues=issues)
 
     required_tables = {
         catalog.columns[column_id].table for column_id in required_columns
     }
+    for relationship in required_relationships:
+        required_tables.update(
+            {
+                relationship.left_table_id,
+                relationship.right_table_id,
+            }
+        )
     graph = build_relationship_graph(list(catalog.relationships.values()))
     closure = find_unique_shortest_join_closure(graph, required_tables)
     if closure.status == "unresolved":
@@ -171,16 +190,20 @@ def validate_plan(
     closure_relationship_ids = {
         relationship_ids_by_endpoints[edge.column_ids] for edge in closure.edges
     }
-    extra_preferences = [
+    missing_required_relationships = [
         preference.relationship_candidate_id
         for preference in join_preferences
         if preference.relationship_candidate_id not in closure_relationship_ids
-        and preference.join_type == "left"
     ]
-    if extra_preferences:
+    if missing_required_relationships:
         return SemanticPlanningResult(
             status="unresolved",
-            issues=[_issue("join_not_required", extra_preferences)],
+            issues=[
+                _issue(
+                    "join_required_edge_missing",
+                    missing_required_relationships,
+                )
+            ],
         )
 
     preferences_by_id = {
@@ -258,7 +281,7 @@ def _validate_numeric(
         issues.append(_issue("numeric_boundary_count_invalid", [predicate.target_id]))
     try:
         [canonical_number(value) for value in predicate.values]
-    except InvalidOperation, ValueError:
+    except (InvalidOperation, ValueError):
         issues.append(_issue("numeric_value_invalid", [predicate.target_id]))
 
     if predicate.target_type == "measure":

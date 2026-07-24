@@ -63,6 +63,7 @@ class OrderMention(_StrictDraftModel):
 
 class LimitMention(_StrictDraftModel):
     raw_text: str
+    value: int = Field(strict=True)
 
 
 class JoinMention(_StrictDraftModel):

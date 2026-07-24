@@ -26,6 +26,14 @@ llm = init_chat_model(
     )
 )
 
+# 语义规划决定指标、维度、谓词和连接语义，使用主模型降低候选漏选风险。
+semantic_planning_llm = init_chat_model(
+    **build_llm_kwargs(
+        app_config.llm.structured_enable_thinking,
+        model=app_config.llm.model,
+    )
+)
+
 # SQL 生成和 SQL 错误修正可以开启 thinking，换取更强的规划/修正能力。
 generate_sql_llm = init_chat_model(
     **build_llm_kwargs(app_config.llm.generate_sql_enable_thinking)

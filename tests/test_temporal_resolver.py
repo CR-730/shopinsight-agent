@@ -30,9 +30,7 @@ def _catalog() -> SemanticCandidateCatalog:
     return SemanticCandidateCatalog(
         metadata_version="meta-v2",
         tables=MappingProxyType({}),
-        columns=MappingProxyType(
-            {"fact_order.date_id": _column("fact_order.date_id")}
-        ),
+        columns=MappingProxyType({"fact_order.date_id": _column("fact_order.date_id")}),
         relationships=MappingProxyType({}),
         metrics=MappingProxyType({}),
         values=MappingProxyType({}),
@@ -42,7 +40,6 @@ def _catalog() -> SemanticCandidateCatalog:
 def _resolve(raw_text="2025年第一季度", relation="during", **changes):
     values = {
         "catalog": _catalog(),
-        "trusted_sources": (f"统计{raw_text}的销售额",),
         "reference_date": date(2026, 7, 19),
         "temporal_column_id": "fact_order.date_id",
     }
@@ -54,12 +51,8 @@ def _resolve(raw_text="2025年第一季度", relation="during", **changes):
 
 
 def test_quarter_and_relative_month_use_explicit_reference_date():
-    quarter = parse_time_span(
-        "2025年第一季度", reference_date=date(2026, 7, 19)
-    )
-    last_month = parse_time_span(
-        "上个月", reference_date=date(2026, 7, 19)
-    )
+    quarter = parse_time_span("2025年第一季度", reference_date=date(2026, 7, 19))
+    last_month = parse_time_span("上个月", reference_date=date(2026, 7, 19))
 
     assert (quarter.start_date, quarter.end_date, quarter.grain) == (
         date(2025, 1, 1),

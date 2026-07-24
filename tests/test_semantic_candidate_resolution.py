@@ -7,7 +7,6 @@ def test_one_valid_candidate_is_resolved():
         raw_text="华南",
         candidate_ids=["v1"],
         catalog={"v1": candidate},
-        trusted_sources=("统计华南销售额",),
     )
 
     assert result.status == "resolved"
@@ -20,7 +19,6 @@ def test_multiple_valid_ids_are_ambiguous_not_first_match():
         raw_text="华南",
         candidate_ids=["v1", "v2"],
         catalog={"v1": object(), "v2": object()},
-        trusted_sources=("统计华南销售额",),
     )
 
     assert result.status == "ambiguous"
@@ -34,7 +32,6 @@ def test_zero_ids_are_unresolved():
         raw_text="火星",
         candidate_ids=[],
         catalog={},
-        trusted_sources=("统计火星销售额",),
     )
 
     assert result.status == "unresolved"
@@ -46,7 +43,6 @@ def test_any_catalog_outside_id_is_invalid():
         raw_text="华南",
         candidate_ids=["v1", "invented"],
         catalog={"v1": object()},
-        trusted_sources=("统计华南销售额",),
     )
 
     assert result.status == "unresolved"
@@ -54,13 +50,13 @@ def test_any_catalog_outside_id_is_invalid():
     assert result.issue.candidate_ids == ["invented"]
 
 
-def test_raw_text_must_be_verbatim_in_a_trusted_source():
+def test_raw_text_is_provenance_not_a_hard_gate():
     result = select_one_candidate(
         raw_text="华南地区",
         candidate_ids=["v1"],
         catalog={"v1": object()},
-        trusted_sources=("统计华南销售额",),
     )
 
-    assert result.status == "unresolved"
-    assert result.issue.code == "untrusted_source_span"
+    assert result.status == "resolved"
+    assert result.candidate_id == "v1"
+    assert result.issue is None

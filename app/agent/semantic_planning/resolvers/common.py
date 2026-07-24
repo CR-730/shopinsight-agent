@@ -24,22 +24,18 @@ def select_one_candidate(
     raw_text: str,
     candidate_ids: list[str],
     catalog: Mapping[str, T],
-    trusted_sources: tuple[str, ...],
     issue_prefix: str = "value",
 ) -> CandidateSelection[T]:
-    """Select only a unique in-catalog ID backed by a verbatim source span."""
+    """Select a unique in-catalog ID.
 
-    if not raw_text or not any(raw_text in source for source in trusted_sources):
-        return CandidateSelection(
-            status="unresolved",
-            issue=_issue(
-                code="untrusted_source_span",
-                raw_text=raw_text,
-                candidate_ids=candidate_ids,
-            ),
-        )
+    ``raw_text`` remains provenance for diagnostics. It is not a verbatim
+    evidence gate because the semantic interpreter may paraphrase wording
+    while preserving a controlled candidate ID.
+    """
     unique_ids = list(dict.fromkeys(candidate_ids))
-    invalid_ids = [candidate_id for candidate_id in unique_ids if candidate_id not in catalog]
+    invalid_ids = [
+        candidate_id for candidate_id in unique_ids if candidate_id not in catalog
+    ]
     if invalid_ids:
         return CandidateSelection(
             status="unresolved",

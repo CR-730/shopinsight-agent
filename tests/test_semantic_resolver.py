@@ -110,17 +110,15 @@ def _draft(**changes):
                 direction="desc",
             )
         ],
-        "limit_mentions": [LimitMention(raw_text="前5个")],
+        "limit_mentions": [LimitMention(raw_text="前5个", value=5)],
     }
     values.update(changes)
     return SemanticDraft(**values)
 
 
 def _context():
-    query = "2025年第一季度华北地区销售额最高的前5个商品"
     return SemanticResolutionContext(
         catalog=_catalog(),
-        trusted_sources=(query,),
         reference_date=date(2026, 7, 19),
         temporal_column_id="fact_order.date_id",
     )
@@ -197,7 +195,6 @@ def test_llm_ambiguity_report_blocks_without_selecting_first_candidate():
     context = _context()
     context = SemanticResolutionContext(
         catalog=context.catalog,
-        trusted_sources=(context.trusted_sources[0] + "，华南",),
         reference_date=context.reference_date,
         temporal_column_id=context.temporal_column_id,
     )
@@ -227,7 +224,6 @@ def test_empty_business_object_is_unresolved():
     draft = SemanticDraft()
     context = SemanticResolutionContext(
         catalog=_catalog(),
-        trusted_sources=("你好",),
         reference_date=date(2026, 7, 19),
         temporal_column_id="fact_order.date_id",
     )
@@ -239,7 +235,7 @@ def test_empty_business_object_is_unresolved():
     assert result.issues[0].code == "business_object_not_planned"
 
 
-def test_multiple_independent_time_mentions_are_blocked():
+def test_multiple_independent_time_mentions_are_ambiguous():
     draft = _draft(
         dimension_mentions=[],
         predicate_mentions=[
@@ -252,20 +248,18 @@ def test_multiple_independent_time_mentions_are_blocked():
     context = _context()
     context = SemanticResolutionContext(
         catalog=context.catalog,
-        trusted_sources=("比较2025年和2026年的销售额",),
         reference_date=context.reference_date,
         temporal_column_id=context.temporal_column_id,
     )
 
     result = asyncio.run(resolve_semantic_draft(draft, context))
 
-    assert result.status == "unresolved"
+    assert result.status == "ambiguous"
     assert result.plan is None
-    assert result.issues[0].code == "multiple_time_turns_unsupported"
+    assert result.issues[0].code == "multiple_temporal_predicates_ambiguous"
 
 
 def test_numeric_metric_predicate_is_included_as_having():
-    query = "2025年第一季度销售额大于10000元的地区"
     draft = _draft(
         dimension_mentions=[
             DimensionMention(
@@ -291,7 +285,6 @@ def test_numeric_metric_predicate_is_included_as_having():
     context = _context()
     context = SemanticResolutionContext(
         catalog=context.catalog,
-        trusted_sources=(query,),
         reference_date=context.reference_date,
         temporal_column_id=context.temporal_column_id,
     )

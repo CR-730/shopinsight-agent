@@ -79,9 +79,7 @@ def _catalog() -> SemanticCandidateCatalog:
 def test_measure_copies_authoritative_definition_without_calculating_it():
     result = resolve_measure(
         MeasureMention(raw_text="销售额", candidate_ids=["GMV"]),
-        MeasureResolutionContext(
-            catalog=_catalog(), trusted_sources=("统计销售额",)
-        ),
+        MeasureResolutionContext(catalog=_catalog()),
     )
 
     assert result.status == "resolved"
@@ -95,15 +93,11 @@ def test_measure_copies_authoritative_definition_without_calculating_it():
 def test_measure_requires_one_authoritative_metric_definition():
     ambiguous = resolve_measure(
         MeasureMention(raw_text="销售", candidate_ids=["GMV", "BROKEN"]),
-        MeasureResolutionContext(
-            catalog=_catalog(), trusted_sources=("统计销售",)
-        ),
+        MeasureResolutionContext(catalog=_catalog()),
     )
     missing_definition = resolve_measure(
         MeasureMention(raw_text="坏指标", candidate_ids=["BROKEN"]),
-        MeasureResolutionContext(
-            catalog=_catalog(), trusted_sources=("统计坏指标",)
-        ),
+        MeasureResolutionContext(catalog=_catalog()),
     )
 
     assert ambiguous.status == "ambiguous"
@@ -119,9 +113,7 @@ def test_group_by_requires_a_dimension_column():
             candidate_ids=["fact_order.order_amount"],
             role="group_by",
         ),
-        DimensionResolutionContext(
-            catalog=_catalog(), trusted_sources=("按订单金额分组",)
-        ),
+        DimensionResolutionContext(catalog=_catalog()),
     )
 
     assert result.status == "unresolved"
@@ -135,9 +127,7 @@ def test_projection_accepts_projectable_keys_but_rejects_sensitive_columns():
             candidate_ids=["fact_order.order_id"],
             role="projection",
         ),
-        DimensionResolutionContext(
-            catalog=_catalog(), trusted_sources=("列出订单编号",)
-        ),
+        DimensionResolutionContext(catalog=_catalog()),
     )
     blocked = resolve_dimension(
         DimensionMention(
@@ -145,9 +135,7 @@ def test_projection_accepts_projectable_keys_but_rejects_sensitive_columns():
             candidate_ids=["dim_customer.customer_name"],
             role="projection",
         ),
-        DimensionResolutionContext(
-            catalog=_catalog(), trusted_sources=("列出客户名称",)
-        ),
+        DimensionResolutionContext(catalog=_catalog()),
     )
 
     assert allowed.status == "resolved"

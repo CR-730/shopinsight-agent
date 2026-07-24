@@ -460,3 +460,34 @@
   forbidden_behavior: [编造火星区域或忽略枚举值不存在]
   fatal_errors: [forbidden_sql_fragment]
   timeout_seconds: 120
+
+- id: join_explicit_inner_adds_customer_table
+  query: 统计有客户档案的订单数，只保留能匹配客户的订单
+  business_source: JOIN 闭包回归-显式关系补齐客户维表
+  suite: regression
+  difficulty: hard
+  capabilities: [semantic_planning, plan_consistency, sql_generation, sql_validation, tool_execution]
+  tags: [join_closure, explicit_inner, customer]
+  risk_points: [显式关系补表, INNER JOIN 被静默忽略]
+  expected_sql_contains: [order_id, customer_id, dim_customer]
+  expected_columns:
+    - fact_order.order_id
+    - fact_order.customer_id
+    - dim_customer.customer_id
+  expected_metrics: [ORDER_COUNT]
+  expected_semantic_plan:
+    measures: [{metric_id: ORDER_COUNT}]
+    joins:
+      - {left_column_id: fact_order.customer_id, right_column_id: dim_customer.customer_id, join_type: inner}
+    required_table_ids: [fact_order, dim_customer]
+    required_column_ids:
+      - fact_order.order_id
+      - fact_order.customer_id
+      - dim_customer.customer_id
+  expected_sql_plan_consistent: true
+  expected_result: {mode: non_empty}
+  forbidden_sql: [delete, update, insert, drop, truncate]
+  must_call_tools: [qdrant.column.search, qdrant.metric.search, mysql.dw.validate, mysql.dw.execute]
+  forbidden_behavior: [忽略显式客户关系, 不补齐客户维表]
+  fatal_errors: [sql_validation_error, forbidden_sql_fragment]
+  timeout_seconds: 180

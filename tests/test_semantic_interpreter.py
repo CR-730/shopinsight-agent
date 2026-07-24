@@ -131,7 +131,6 @@ def test_interpreter_uses_one_llm_call_and_returns_untrusted_draft(monkeypatch):
         interpreter.interpret_semantics(
             "统计销售额",
             _runtime(),
-            conversation_history="",
             catalog=_catalog(),
         )
     )
@@ -178,7 +177,6 @@ def test_prompt_contains_controlled_ids_but_no_backend_owned_output_fields(
         interpreter.interpret_semantics(
             "统计华南销售额",
             _runtime(),
-            conversation_history="无",
             catalog=_catalog(),
         )
     )
@@ -194,8 +192,19 @@ def test_prompt_contains_controlled_ids_but_no_backend_owned_output_fields(
     assert "比较发生的语义层级" in prompt_text
     assert "聚合或派生结果" in prompt_text
     assert "单条记录的原始属性" in prompt_text
-    assert "当前问题中的修改、替换、取消和新增要求优先于历史消息" in prompt_text
-    assert "历史消息只用于补全当前问题省略但仍然有效的信息" in prompt_text
+    assert "已经补全上下文、可独立理解" in prompt_text
+    assert "已经过检索初筛" in prompt_text
+    assert "最能解释用户意图" in prompt_text
+    assert "不要求与候选严格同名" in prompt_text
+    assert "不能仅因为字面不同而返回空列表" in prompt_text
+    assert "归一化后的正整数" in prompt_text
+    assert "销量最高的商品" in prompt_text
+    assert "各商品单笔最高订单金额" in prompt_text
+    assert "定义统计、比较、排序或排名的对象范围" in prompt_text
+    assert "销售额最高的地区" in prompt_text
+    assert "不要仅根据查询中是否存在聚合指标判断维度角色" in prompt_text
+    assert "明确表示同一业务对象" not in prompt_text
+    assert "conversation_history" not in prompt_text
     for overfit_example in (
         "销售额、订单数、客单价",
         "单笔、每条记录",
@@ -207,6 +216,9 @@ def test_prompt_contains_controlled_ids_but_no_backend_owned_output_fields(
     assert '"source_query"' not in prompt_text
     assert captured["model"] is SemanticDraft
     assert "source_query" not in captured["schema"]["properties"]
+    limit_schema = captured["schema"]["$defs"]["LimitMention"]["properties"]
+    assert set(limit_schema) == {"raw_text", "value"}
+    assert limit_schema["value"]["type"] == "integer"
     assert '"value_candidate_ids":[]' in prompt_text
     for forbidden in (
         "canonical_value",
@@ -216,6 +228,20 @@ def test_prompt_contains_controlled_ids_but_no_backend_owned_output_fields(
         '"expression"',
     ):
         assert forbidden not in prompt_text
+
+
+def test_limit_sanitizer_preserves_model_normalized_value():
+    sanitized = interpreter._sanitize_draft_payload(
+        {
+            "limit_mentions": [
+                {"raw_text": "销量最高的商品", "value": 1, "sql": "LIMIT 1"}
+            ]
+        }
+    )
+
+    assert sanitized["limit_mentions"] == [
+        {"raw_text": "销量最高的商品", "value": 1}
+    ]
 
 
 def test_fallback_keeps_exact_ids_but_does_not_infer_roles_operators_or_time(
@@ -229,7 +255,6 @@ def test_fallback_keeps_exact_ids_but_does_not_infer_roles_operators_or_time(
         interpreter.interpret_semantics(
             "按地区统计2025年第一季度销售额最高的前5名",
             _runtime(),
-            conversation_history="",
             catalog=_catalog(),
         )
     )
@@ -261,7 +286,6 @@ def test_fallback_never_selects_first_value_when_exact_term_has_multiple_ids(
         interpreter.interpret_semantics(
             "统计华南销售额",
             _runtime(),
-            conversation_history="",
             catalog=_catalog(ambiguous_values=True),
         )
     )
@@ -297,7 +321,6 @@ def test_interpreter_ignores_backend_owned_temporal_target_ids(monkeypatch):
         interpreter.interpret_semantics(
             "2025年第一季度销售额",
             _runtime(),
-            conversation_history="",
             catalog=_catalog(),
         )
     )
@@ -326,7 +349,6 @@ def test_interpreter_ignores_redundant_enum_column_candidate_ids(monkeypatch):
         interpreter.interpret_semantics(
             "统计华北销售额",
             _runtime(),
-            conversation_history="",
             catalog=_catalog(),
         )
     )
@@ -355,7 +377,6 @@ def test_interpreter_preserves_enum_mention_without_value_candidates(monkeypatch
         interpreter.interpret_semantics(
             "统计火星区域销售额",
             _runtime(),
-            conversation_history="",
             catalog=_catalog(),
         )
     )
@@ -365,7 +386,7 @@ def test_interpreter_preserves_enum_mention_without_value_candidates(monkeypatch
     assert mention.value_candidate_ids == []
 
 
-def test_temporal_filter_is_not_duplicated_as_group_dimension(monkeypatch):
+def test_interpreter_preserves_llm_selected_temporal_dimension(monkeypatch):
     async def fake_invoke(*args, **kwargs):
         return {
             "measure_mentions": [{"raw_text": "销售额", "candidate_ids": ["GMV"]}],
@@ -396,12 +417,11 @@ def test_temporal_filter_is_not_duplicated_as_group_dimension(monkeypatch):
         interpreter.interpret_semantics(
             "2025年第一季度销售额最高的前5个商品",
             _runtime(),
-            conversation_history="",
             catalog=_catalog(),
         )
     )
 
-    assert [item.raw_text for item in result.dimension_mentions] == ["地区"]
+    assert len(result.dimension_mentions) == 2
 
 
 def test_prompt_forbids_temporal_candidate_ids_and_implicit_time_grouping(
@@ -418,7 +438,6 @@ def test_prompt_forbids_temporal_candidate_ids_and_implicit_time_grouping(
         interpreter.interpret_semantics(
             "2025年第一季度销售额",
             _runtime(),
-            conversation_history="",
             catalog=_catalog(),
         )
     )
@@ -439,7 +458,6 @@ def test_prompt_limits_join_choice_to_relationship_and_preserved_side(monkeypatc
         interpreter.interpret_semantics(
             "包括没有订单的地区",
             _runtime(),
-            conversation_history="",
             catalog=_catalog(),
         )
     )
@@ -470,7 +488,6 @@ def test_interpreter_allowlists_join_mention_fields(monkeypatch):
         interpreter.interpret_semantics(
             "包括没有订单的地区",
             _runtime(),
-            conversation_history="",
             catalog=_catalog(),
         )
     )

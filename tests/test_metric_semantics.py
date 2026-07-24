@@ -126,6 +126,13 @@ def test_project_metric_config_declares_authoritative_aggregations():
         "ORDER_COUNT": "count_distinct",
         "GMV": "sum",
         "AOV": "avg",
+        "TOTAL_QUANTITY": "sum",
+        "AVG_QUANTITY": "avg",
+        "CUSTOMER_COUNT": "count_distinct",
+        "PRODUCT_COUNT": "count_distinct",
+        "MAX_ORDER_AMOUNT": "max",
+        "MIN_ORDER_AMOUNT": "min",
+        "AVG_ITEM_PRICE": "expression",
     }
 
 

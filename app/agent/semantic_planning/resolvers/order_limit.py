@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass
 from typing import Literal
 
@@ -16,14 +15,10 @@ from app.agent.semantic_planning.plan import (
 from app.agent.semantic_planning.resolvers.common import select_one_candidate
 
 OrderLimitStatus = Literal["resolved", "unresolved", "ambiguous"]
-_ARABIC_INTEGER = re.compile(r"(?<![\d.])(\d+)(?![\d.])")
-
-
 @dataclass(frozen=True)
 class OrderLimitResolutionContext:
     selected_measures: tuple[MeasurePlan, ...]
     selected_dimensions: tuple[DimensionPlan, ...]
-    trusted_sources: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -40,8 +35,7 @@ def resolve_order_and_limit(
     context: OrderLimitResolutionContext,
 ) -> OrderLimitResolution:
     selected = {
-        measure.metric_id: ("measure", measure)
-        for measure in context.selected_measures
+        measure.metric_id: ("measure", measure) for measure in context.selected_measures
     }
     selected.update(
         {
@@ -56,7 +50,6 @@ def resolve_order_and_limit(
             raw_text=mention.raw_text,
             candidate_ids=mention.target_candidate_ids,
             catalog=selected,
-            trusted_sources=context.trusted_sources,
             issue_prefix="order_target",
         )
         if selection.status != "resolved":
@@ -75,7 +68,7 @@ def resolve_order_and_limit(
             )
         )
 
-    limit_result = _resolve_limit(limit_mentions, context.trusted_sources)
+    limit_result = _resolve_limit(limit_mentions)
     if isinstance(limit_result, OrderLimitResolution):
         return limit_result
     limit = limit_result
@@ -89,7 +82,11 @@ def resolve_order_and_limit(
             "ambiguous",
             "top_n_order_target_ambiguous",
             " ".join(mention.raw_text for mention in limit_mentions),
-            [item for mention in order_mentions for item in mention.target_candidate_ids],
+            [
+                item
+                for mention in order_mentions
+                for item in mention.target_candidate_ids
+            ],
         )
     return OrderLimitResolution(
         status="resolved",
@@ -100,7 +97,6 @@ def resolve_order_and_limit(
 
 def _resolve_limit(
     mentions: list[LimitMention],
-    trusted_sources: tuple[str, ...],
 ) -> int | None | OrderLimitResolution:
     if not mentions:
         return None
@@ -112,16 +108,7 @@ def _resolve_limit(
             [],
         )
     mention = mentions[0]
-    if not mention.raw_text or not any(
-        mention.raw_text in source for source in trusted_sources
-    ):
-        return _blocked("unresolved", "untrusted_source_span", mention.raw_text, [])
-    matches = _ARABIC_INTEGER.findall(mention.raw_text)
-    if len(matches) != 1:
-        return _blocked(
-            "unresolved", "limit_not_explicit_integer", mention.raw_text, []
-        )
-    limit = int(matches[0])
+    limit = mention.value
     if not 1 <= limit <= 1000:
         return _blocked("unresolved", "limit_out_of_range", mention.raw_text, [])
     return limit

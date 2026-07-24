@@ -42,15 +42,11 @@ def _catalog():
         "dim_sales_area.area_name": _column("dim_sales_area.area_name"),
     }
     values = {
-        "v-north": _value(
-            "v-north", "华北地区", "dim_region.region_name"
-        ),
+        "v-north": _value("v-north", "华北地区", "dim_region.region_name"),
         "v-south-region": _value(
             "v-south-region", "华南地区", "dim_region.region_name"
         ),
-        "v-south-area": _value(
-            "v-south-area", "华南片区", "dim_sales_area.area_name"
-        ),
+        "v-south-area": _value("v-south-area", "华南片区", "dim_sales_area.area_name"),
     }
     return SemanticCandidateCatalog(
         metadata_version="meta-v2",
@@ -65,7 +61,6 @@ def _catalog():
 def _context():
     return EnumResolutionContext(
         catalog=_catalog(),
-        trusted_sources=("统计华北和华南销售额",),
     )
 
 

@@ -5,7 +5,6 @@ from types import SimpleNamespace
 
 from app.agent import state as state_module
 from app.agent.nodes import semantic_planning as production_node
-from app.agent.semantic_planning import orchestrator
 from app.agent.semantic_planning.catalog import SemanticCandidateCatalog
 from app.agent.semantic_planning.draft import (
     AmbiguityReport,
@@ -181,25 +180,12 @@ def test_phase_three_activates_new_orchestrator_without_writing_legacy_state():
     ) not in state_module.DataAgentState.__optional_keys__
 
 
-def test_recent_user_history_is_trusted_for_all_followups_but_assistant_text_is_not():
-    messages = [
-        {"role": "user", "content": "按地区看销售额"},
-        {"role": "assistant", "content": "已查询华北地区"},
-    ]
+def test_orchestrator_consumes_the_rewritten_query_without_history(monkeypatch):
+    captured = {}
 
-    assert orchestrator._trusted_sources(
-        "改成华南",
-        conversation_messages=messages,
-    ) == (
-        "改成华南",
-        "user: 按地区看销售额",
-    )
-
-
-def test_orchestrator_can_inherit_an_omitted_metric_from_recent_user_history(
-    monkeypatch,
-):
     async def interpret(query, runtime, **kwargs):
+        captured["query"] = query
+        captured["kwargs"] = kwargs
         return SemanticDraft(
             measure_mentions=[MeasureMention(raw_text="销售额", candidate_ids=["GMV"])],
         )
@@ -208,7 +194,7 @@ def test_orchestrator_can_inherit_an_omitted_metric_from_recent_user_history(
         "app.agent.semantic_planning.orchestrator.interpret_semantics", interpret
     )
     state = _state()
-    state["query"] = "改成华南"
+    state["query"] = "统计华南地区的销售额"
     state["conversation_messages"] = [
         {"role": "user", "content": "按地区看销售额"},
         {"role": "assistant", "content": "已完成上一轮查询"},
@@ -218,6 +204,8 @@ def test_orchestrator_can_inherit_an_omitted_metric_from_recent_user_history(
 
     assert result["failure"] is None
     assert result["semantic_plan"]["measures"][0]["metric_id"] == "GMV"
+    assert captured["query"] == "统计华南地区的销售额"
+    assert "conversation_history" not in captured["kwargs"]
 
 
 def test_production_node_streams_blocked_plan_without_legacy_state(monkeypatch):

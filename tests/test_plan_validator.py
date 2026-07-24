@@ -182,7 +182,7 @@ def test_validator_applies_left_join_preference_and_direction():
     ]
 
 
-def test_validator_ignores_inner_join_preference_outside_required_closure():
+def test_validator_materializes_explicit_inner_join_as_required_edge():
     unused = _relationship("fact_order.product_id", "dim_product.product_id")
     catalog = _catalog(
         extra_columns={
@@ -204,11 +204,33 @@ def test_validator_ignores_inner_join_preference_outside_required_closure():
     )
 
     assert result.status == "resolved"
-    assert result.plan.required_table_ids == ["dim_region", "fact_order"]
-    assert len(result.plan.joins) == 1
+    assert result.plan.required_table_ids == [
+        "dim_product",
+        "dim_region",
+        "fact_order",
+    ]
+    assert {
+        (join.left_column_id, join.right_column_id, join.join_type)
+        for join in result.plan.joins
+    } == {
+        (
+            "dim_product.product_id",
+            "fact_order.product_id",
+            "inner",
+        ),
+        (
+            "dim_region.region_id",
+            "fact_order.region_id",
+            "inner",
+        ),
+    }
+    assert {
+        "dim_product.product_id",
+        "fact_order.product_id",
+    } <= set(result.plan.required_column_ids)
 
 
-def test_validator_rejects_left_join_preference_outside_required_closure():
+def test_validator_materializes_explicit_left_join_as_required_edge():
     unused = _relationship("fact_order.product_id", "dim_product.product_id")
     catalog = _catalog(
         extra_columns={
@@ -230,8 +252,31 @@ def test_validator_rejects_left_join_preference_outside_required_closure():
         ),
     )
 
-    assert result.status == "unresolved"
-    assert result.issues[0].code == "join_not_required"
+    assert result.status == "resolved"
+    assert result.plan.required_table_ids == [
+        "dim_product",
+        "dim_region",
+        "fact_order",
+    ]
+    assert {
+        (join.left_column_id, join.right_column_id, join.join_type)
+        for join in result.plan.joins
+    } == {
+        (
+            "dim_product.product_id",
+            "fact_order.product_id",
+            "left",
+        ),
+        (
+            "dim_region.region_id",
+            "fact_order.region_id",
+            "inner",
+        ),
+    }
+    assert {
+        "dim_product.product_id",
+        "fact_order.product_id",
+    } <= set(result.plan.required_column_ids)
 
 
 def test_validator_rejects_metadata_version_and_prepopulated_closure():

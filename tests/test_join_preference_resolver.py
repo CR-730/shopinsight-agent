@@ -40,7 +40,6 @@ def test_resolves_controlled_left_join_preference():
             )
         ],
         catalog=_catalog(),
-        trusted_sources=("包括没有订单的地区",),
     )
 
     assert result.status == "resolved"
@@ -60,7 +59,6 @@ def test_rejects_left_table_outside_relationship_endpoints():
             )
         ],
         catalog=_catalog(),
-        trusted_sources=("包括没有订单的地区",),
     )
 
     assert result.status == "unresolved"
@@ -84,7 +82,6 @@ def test_conflicting_preferences_for_same_relationship_are_ambiguous():
             ),
         ],
         catalog=_catalog(),
-        trusted_sources=("按地区统计，包括没有订单的地区",),
     )
 
     assert result.status == "ambiguous"

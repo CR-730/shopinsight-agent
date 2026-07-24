@@ -7,10 +7,7 @@ from langchain_core.prompts import PromptTemplate
 from app.agent.llm import correct_sql_llm
 from app.agent.llm_usage import ainvoke_llm_with_usage
 from app.agent.sql.plan_projection import project_plan_for_sql
-from app.agent.sql.sql_guard import (
-    normalize_sql_for_execution,
-    repair_invalid_join_relationship,
-)
+from app.agent.sql.sql_guard import normalize_sql_for_execution
 from app.agent.state import DataAgentState
 from app.conf.app_config import app_config
 from app.core.log import logger
@@ -28,11 +25,6 @@ async def correct_sql_candidate(
 ):
     correction_attempts = correction_attempts + 1
     sql = state["sql"]
-
-    repaired_sql = repair_invalid_join_relationship(state, sql)
-    if repaired_sql and not is_same_sql_after_normalization(sql, repaired_sql):
-        logger.info(f"基于元数据关系校正 SQL：{repaired_sql}")
-        return {"sql": repaired_sql, "attempts": correction_attempts}
 
     result = await ainvoke_llm_with_usage(
         PromptTemplate(

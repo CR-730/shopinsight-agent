@@ -53,7 +53,6 @@ from app.agent.semantic_planning.resolvers.temporal import (
 @dataclass(frozen=True)
 class SemanticResolutionContext:
     catalog: SemanticCandidateCatalog
-    trusted_sources: tuple[str, ...]
     reference_date: date
     temporal_column_id: str
 
@@ -78,10 +77,7 @@ async def resolve_semantic_draft(
         blocking_statuses=blocking_statuses,
     )
 
-    measure_context = MeasureResolutionContext(
-        catalog=context.catalog,
-        trusted_sources=context.trusted_sources,
-    )
+    measure_context = MeasureResolutionContext(catalog=context.catalog)
     for mention in draft.measure_mentions:
         result = resolve_measure(mention, measure_context)
         if result.status != "resolved":
@@ -96,10 +92,7 @@ async def resolve_semantic_draft(
             evidence=result.plan.aggregation,
         )
 
-    dimension_context = DimensionResolutionContext(
-        catalog=context.catalog,
-        trusted_sources=context.trusted_sources,
-    )
+    dimension_context = DimensionResolutionContext(catalog=context.catalog)
     for mention in draft.dimension_mentions:
         result = resolve_dimension(mention, dimension_context)
         if result.status != "resolved":
@@ -127,31 +120,25 @@ async def resolve_semantic_draft(
         issues.append(
             PlanningIssue(
                 phase="resolution",
-                code="multiple_time_turns_unsupported",
+                code="multiple_temporal_predicates_ambiguous",
                 source_span=" ".join(mention.raw_text for mention in temporal_mentions),
                 candidate_ids=[],
                 details={},
             )
         )
-        blocking_statuses.append("unresolved")
+        blocking_statuses.append("ambiguous")
 
     for mention in draft.predicate_mentions:
         if isinstance(mention, EnumPredicateMention):
             result = await resolve_enum_predicate(
                 mention,
-                EnumResolutionContext(
-                    catalog=context.catalog,
-                    trusted_sources=context.trusted_sources,
-                ),
+                EnumResolutionContext(catalog=context.catalog),
             )
             method = "controlled_value_candidate"
         elif isinstance(mention, NumericPredicateMention):
             result = resolve_numeric_predicate(
                 mention,
-                NumericResolutionContext(
-                    catalog=context.catalog,
-                    trusted_sources=context.trusted_sources,
-                ),
+                NumericResolutionContext(catalog=context.catalog),
             )
             method = "decimal_normalization"
         else:
@@ -161,7 +148,6 @@ async def resolve_semantic_draft(
                 mention,
                 TemporalResolutionContext(
                     catalog=context.catalog,
-                    trusted_sources=context.trusted_sources,
                     reference_date=context.reference_date,
                     temporal_column_id=context.temporal_column_id,
                 ),
@@ -185,7 +171,6 @@ async def resolve_semantic_draft(
         OrderLimitResolutionContext(
             selected_measures=tuple(measures),
             selected_dimensions=tuple(dimensions),
-            trusted_sources=context.trusted_sources,
         ),
     )
     order_by = []
@@ -208,7 +193,7 @@ async def resolve_semantic_draft(
                 provenance,
                 raw_text=draft.limit_mentions[0].raw_text,
                 resolved_id=f"limit:{limit}",
-                method="explicit_integer_limit",
+                method="normalized_limit",
                 evidence=str(limit),
             )
 
@@ -217,9 +202,7 @@ async def resolve_semantic_draft(
             PlanningIssue(
                 phase="resolution",
                 code="business_object_not_planned",
-                source_span=(
-                    context.trusted_sources[0] if context.trusted_sources else ""
-                ),
+                source_span="",
                 candidate_ids=[],
                 details={},
             )
@@ -267,12 +250,7 @@ def _collect_ambiguity_reports(
             for candidate_id in dict.fromkeys(report.candidate_ids)
             if candidate_id not in all_candidates
         ]
-        if not report.raw_text or not any(
-            report.raw_text in source for source in context.trusted_sources
-        ):
-            code = "untrusted_source_span"
-            status: PlanningStatus = "unresolved"
-        elif invalid_ids:
+        if invalid_ids:
             code = "invalid_candidate_id"
             status = "unresolved"
         else:

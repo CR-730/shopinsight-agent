@@ -1,4 +1,4 @@
-from app.agent.llm import build_llm_kwargs
+from app.agent.llm import build_llm_kwargs, semantic_planning_llm
 from app.conf.app_config import app_config
 
 
@@ -23,3 +23,10 @@ def test_build_llm_kwargs_accepts_model_override():
 def test_generate_and_correct_sql_thinking_are_configured_separately():
     assert app_config.llm.generate_sql_enable_thinking is False
     assert app_config.llm.correct_sql_enable_thinking is True
+
+
+def test_semantic_planning_uses_main_model():
+    assert semantic_planning_llm.model_name == app_config.llm.model
+    assert semantic_planning_llm.extra_body == {
+        "enable_thinking": app_config.llm.structured_enable_thinking
+    }

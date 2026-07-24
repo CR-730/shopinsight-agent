@@ -27,7 +27,7 @@ class FailingDWRepository(FakeDWRepository):
         raise RuntimeError("database disconnected")
 
 
-def test_sql_executor_pre_validate_reuses_sql_guard_logic():
+def test_sql_executor_pre_validate_checks_database():
     async def run_case():
         repository = FakeDWRepository()
         executor = SqlExecutor(repository)
@@ -37,11 +37,11 @@ def test_sql_executor_pre_validate_reuses_sql_guard_logic():
             SqlExecutionRequest(sql="SELECT * FROM fact_order;"),
         )
 
-        assert result.ok is False
-        assert result.status == "blocked"
-        assert result.error == "禁止 SELECT *"
+        assert result.ok is True
+        assert result.status == "pass"
+        assert result.error is None
         assert result.audit["tool_name"] == "run_sql"
-        assert result.audit["status"] == "blocked"
+        assert result.audit["status"] == "pass"
         assert repository.validated_sql == ["SELECT * FROM fact_order"]
 
     asyncio.run(run_case())

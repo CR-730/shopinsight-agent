@@ -7,7 +7,6 @@ from datetime import date
 from typing import Any
 
 from app.agent.failure import build_failure
-from app.agent.memory import sliding_conversation_history
 from app.agent.semantic_planning.catalog import (
     build_semantic_candidate_catalog,
 )
@@ -34,12 +33,8 @@ async def build_semantic_plan(state, runtime) -> dict[str, Any]:
             repository.list_column_infos(),
             repository.list_metric_infos(),
         )
-        metadata_version = str(
-            runtime.context.get("metadata_cache_version") or ""
-        )
-        reference_date = _reference_date(
-            runtime.context.get("semantic_reference_date")
-        )
+        metadata_version = str(runtime.context.get("metadata_cache_version") or "")
+        reference_date = _reference_date(runtime.context.get("semantic_reference_date"))
         policy = load_policy_config()
         temporal_column_id = str(
             (policy.get("semantic") or {}).get("temporal_column_id") or ""
@@ -55,23 +50,15 @@ async def build_semantic_plan(state, runtime) -> dict[str, Any]:
             metadata_version=metadata_version,
             policy=policy,
         )
-        conversation_messages = state.get("conversation_messages") or []
-        conversation_history = sliding_conversation_history(conversation_messages)
-        trusted_sources = _trusted_sources(
-            query,
-            conversation_messages=conversation_messages,
-        )
         draft = await interpret_semantics(
             query,
             runtime,
-            conversation_history=conversation_history,
             catalog=catalog,
         )
         resolution = await resolve_semantic_draft(
             draft,
             SemanticResolutionContext(
                 catalog=catalog,
-                trusted_sources=trusted_sources,
                 reference_date=reference_date,
                 temporal_column_id=temporal_column_id,
             ),
@@ -80,7 +67,6 @@ async def build_semantic_plan(state, runtime) -> dict[str, Any]:
             join_resolution = resolve_join_preferences(
                 draft.join_mentions,
                 catalog=catalog,
-                trusted_sources=trusted_sources,
             )
             if join_resolution.status == "resolved":
                 result = validate_plan(
@@ -168,20 +154,6 @@ def _reference_date(value) -> date:
     if isinstance(value, str) and value:
         return date.fromisoformat(value)
     raise ValueError("semantic_reference_date_required")
-
-
-def _trusted_sources(
-    query: str,
-    *,
-    conversation_messages: list[dict[str, Any]],
-) -> tuple[str, ...]:
-    user_messages = [
-        message
-        for message in conversation_messages
-        if str(message.get("role") or "").casefold() == "user"
-    ]
-    user_history = sliding_conversation_history(user_messages)
-    return (query, user_history) if user_history else (query,)
 
 
 __all__ = ["build_semantic_plan"]

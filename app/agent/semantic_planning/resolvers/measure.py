@@ -29,7 +29,6 @@ _AGGREGATIONS = {
 @dataclass(frozen=True)
 class MeasureResolutionContext:
     catalog: SemanticCandidateCatalog
-    trusted_sources: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -47,7 +46,6 @@ def resolve_measure(
         raw_text=mention.raw_text,
         candidate_ids=mention.candidate_ids,
         catalog=context.catalog.metrics,
-        trusted_sources=context.trusted_sources,
         issue_prefix="metric",
     )
     if selection.status != "resolved":

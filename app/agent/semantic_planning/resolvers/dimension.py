@@ -20,7 +20,6 @@ DimensionResolutionStatus = Literal["resolved", "unresolved", "ambiguous"]
 @dataclass(frozen=True)
 class DimensionResolutionContext:
     catalog: SemanticCandidateCatalog
-    trusted_sources: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -39,7 +38,6 @@ def resolve_dimension(
         raw_text=mention.raw_text,
         candidate_ids=mention.candidate_ids,
         catalog=context.catalog.columns,
-        trusted_sources=context.trusted_sources,
         issue_prefix=issue_prefix,
     )
     if selection.status != "resolved":

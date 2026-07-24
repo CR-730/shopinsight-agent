@@ -9,7 +9,6 @@ from app.agent.nodes.intent_recognition import (
 from app.agent.schema_relations import is_valid_join_pair
 from app.agent.sql.sql_guard import (
     normalize_sql_for_execution,
-    repair_invalid_join_relationship,
     validate_sql_before_execution,
     validate_sql_structure_semantics,
 )
@@ -61,6 +60,7 @@ def test_intent_recognition_allows_clear_data_query_without_business_keyword_rul
     result = {
         "decision": "allow",
         "category": "safe",
+        "rewritten_query": "统计销售额",
         "user_message": "",
     }
 
@@ -71,6 +71,7 @@ def test_intent_recognition_blocks_missing_query_object():
     result = {
         "decision": "block",
         "category": "missing_query_object",
+        "rewritten_query": "",
         "user_message": "请补充要查询的指标或业务对象。",
     }
 
@@ -81,6 +82,7 @@ def test_intent_recognition_blocks_prompt_injection():
     result = {
         "decision": "block",
         "category": "prompt_injection",
+        "rewritten_query": "",
         "user_message": "无法处理该请求。",
     }
 
@@ -109,10 +111,11 @@ def test_intent_recognition_streams_llm_text_without_stop_marker(monkeypatch):
         stream_writer = staticmethod(events.append)
         context = {"cost_tracker": None}
 
-    async def fake_classify_query_intent(query, runtime):
+    async def fake_classify_query_intent(query, runtime, *, conversation_history=""):
         return {
             "decision": "block",
             "category": "clearly_non_data",
+            "rewritten_query": "",
             "user_message": "我理解你是在问天气，但我只能处理电商经营数据查询。",
         }
 
@@ -136,15 +139,19 @@ def test_intent_recognition_streams_llm_text_without_stop_marker(monkeypatch):
 
 def test_intent_recognition_reports_step_without_generating_user_response(monkeypatch):
     events = []
+    captured = {}
 
     class Runtime:
         stream_writer = staticmethod(events.append)
         context = {"cost_tracker": None}
 
-    async def fake_classify_query_intent(query, runtime):
+    async def fake_classify_query_intent(query, runtime, *, conversation_history=""):
+        captured["query"] = query
+        captured["conversation_history"] = conversation_history
         return {
             "decision": "allow",
             "category": "safe",
+            "rewritten_query": "统计华南地区的销售额",
             "user_message": "",
         }
 
@@ -154,10 +161,25 @@ def test_intent_recognition_reports_step_without_generating_user_response(monkey
         fake_classify_query_intent,
     )
 
-    result = asyncio.run(intent_recognition({"query": "统计销售额"}, Runtime()))
+    result = asyncio.run(
+        intent_recognition(
+            {
+                "query": "改成华南",
+                "conversation_messages": [
+                    {"role": "user", "content": "按地区统计销售额"},
+                    {"role": "assistant", "content": "已经查询完成"},
+                ],
+            },
+            Runtime(),
+        )
+    )
     text = "".join(event.get("delta", "") for event in events)
 
-    assert result == {"failure": None}
+    assert result == {"query": "统计华南地区的销售额", "failure": None}
+    assert captured == {
+        "query": "改成华南",
+        "conversation_history": "user: 按地区统计销售额",
+    }
     assert events[0] == {"type": "progress", "step": "意图识别", "status": "running"}
     assert events[-1] == {"type": "progress", "step": "意图识别", "status": "success"}
     assert text == ""
@@ -179,6 +201,17 @@ def test_pre_sql_execution_validation_blocks_sensitive_column_in_where():
 
     assert error is not None
     assert "敏感字段" in error
+
+
+def test_pre_sql_execution_validation_allows_sensitive_identifier_count():
+    sql = (
+        "SELECT region_id, COUNT(DISTINCT customer_id) AS customer_count "
+        "FROM fact_order GROUP BY region_id"
+    )
+
+    error = validate_sql_before_execution({"query": "按地区统计下单客户数"}, sql)
+
+    assert error is None
 
 
 def test_pre_sql_execution_validation_blocks_sensitive_column_in_cte():
@@ -269,39 +302,6 @@ def test_pre_sql_execution_validation_flags_invalid_join_relationship_as_repaira
     )
 
 
-def test_repair_invalid_join_relationship_uses_metadata_candidate():
-    state = {
-        "semantic_plan": _semantic_plan(
-            joins=[
-                {
-                    "left_column_id": "fact_order.region_id",
-                    "right_column_id": "dim_region.region_id",
-                    "join_type": "inner",
-                }
-            ],
-            required_table_ids=["fact_order", "dim_region"],
-            required_column_ids=[
-                "fact_order.region_id",
-                "fact_order.order_amount",
-                "dim_region.region_id",
-                "dim_region.region_name",
-            ],
-        )
-    }
-    sql = """
-    SELECT SUM(f.order_amount) AS GMV
-    FROM fact_order f
-    JOIN dim_region r ON f.region_id = r.region_name
-    WHERE r.region_name = '华北'
-    """
-
-    repaired = repair_invalid_join_relationship(state, sql)
-
-    assert repaired is not None
-    assert "f.region_id = r.region_id" in repaired
-    assert "r.region_name = '华北'" in repaired
-
-
 def test_pre_sql_execution_validation_allows_valid_join_relationship():
     state = {
         "semantic_plan": _semantic_plan(
@@ -333,7 +333,7 @@ def test_pre_sql_execution_validation_allows_valid_join_relationship():
     assert error is None
 
 
-def test_empty_join_plan_never_falls_back_to_retrieval_context_for_repair():
+def test_empty_join_plan_never_falls_back_to_retrieval_context_for_validation():
     state = {
         "semantic_plan": _semantic_plan(
             required_table_ids=["fact_order"],
@@ -358,7 +358,6 @@ def test_empty_join_plan_never_falls_back_to_retrieval_context_for_repair():
     JOIN dim_region r ON f.region_id = r.region_name
     """
 
-    assert repair_invalid_join_relationship(state, sql) is None
     assert "不符合查询计划" in validate_sql_structure_semantics(state, sql)
 
 

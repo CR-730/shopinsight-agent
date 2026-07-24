@@ -133,17 +133,14 @@ async def _check_followup_memory_question_shape() -> dict[str, Any]:
         service,
         conversation=conversation,
         query="那华东呢",
-        memory_query="user: 统计华北 GMV\nuser: 那华东呢",
         metadata_cache_version="meta-v1",
-        final_state=_successful_state(),
+        final_state={**_successful_state(), "query": "统计华东 GMV"},
     )
 
     question = repository.saved_tool_usage[0]["question"]
     return _result(
-        "追问 memory question 包含用户上下文且不含 assistant 摘要",
-        "统计华北 GMV" in question
-        and "那华东呢" in question
-        and "查询成功" not in question,
+        "追问 memory question 使用重写后的独立问题",
+        question == "统计华东 GMV",
     )
 
 
@@ -155,7 +152,6 @@ async def _check_success_with_binding_writes_memory() -> dict[str, Any]:
         service,
         conversation=Conversation(id="conv-1", user_id="user-a"),
         query="统计 GMV",
-        memory_query="统计 GMV",
         metadata_cache_version="meta-v1",
         final_state=_successful_state(),
     )
@@ -198,7 +194,6 @@ async def _check_blocked_and_error_do_not_write_memory() -> dict[str, Any]:
             service,
             conversation=Conversation(id="conv-1", user_id="user-a"),
             query="统计 GMV",
-            memory_query="统计 GMV",
             metadata_cache_version="meta-v1",
             final_state=final_state,
         )

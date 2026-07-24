@@ -20,7 +20,10 @@ from app.agent.semantic_planning.plan import SemanticQueryPlan
 from app.agent.sql.plan_consistency import validate_sql_plan_consistency
 from app.agent.sql.sql_correction import correct_sql_candidate
 from app.agent.sql.sql_executor import SqlExecutionRequest, SqlExecutor
-from app.agent.sql.sql_guard import normalize_sql_for_execution
+from app.agent.sql.sql_guard import (
+    normalize_sql_for_execution,
+    validate_sql_before_execution,
+)
 from app.agent.state import DataAgentState
 from app.conf.app_config import app_config
 from app.core.log import logger
@@ -129,6 +132,20 @@ async def sql_executor(state: DataAgentState, runtime: Runtime[DataAgentContext]
 
 async def _pre_validate_sql(state: dict, executor: SqlExecutor) -> dict:
     sql = normalize_sql_for_execution(state["sql"])
+    safety_error = validate_sql_before_execution(state, sql)
+    if safety_error:
+        guard_kind = getattr(safety_error, "kind", "safety_error")
+        return {
+            "sql": sql,
+            "status": (
+                "repairable_error"
+                if guard_kind == "parse_error"
+                else "blocked"
+            ),
+            "validation_error": safety_error,
+            "plan_differences": [],
+        }
+
     semantic_plan = state.get("semantic_plan")
     if not semantic_plan:
         difference = {
@@ -249,7 +266,7 @@ def _sql_fingerprint(sql: str) -> str:
             pretty=False,
             normalize=True,
         )
-    except ParseError, ValueError:
+    except (ParseError, ValueError):
         pass
     return stable_fingerprint(normalized)
 

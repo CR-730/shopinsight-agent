@@ -83,9 +83,7 @@ class SemanticCandidateCatalog:
     def value_by_id(self, candidate_id: str) -> ValueCandidate:
         return self.values[candidate_id]
 
-    def relationship_by_id(
-        self, candidate_id: str
-    ) -> RelationshipCandidate:
+    def relationship_by_id(self, candidate_id: str) -> RelationshipCandidate:
         return self.relationships[candidate_id]
 
 
@@ -157,8 +155,7 @@ def _build_authoritative_column_candidates(
         for column_id in sql_policy.get("sensitive_columns", [])
     }
     sensitive_names = {
-        str(name).casefold()
-        for name in sql_policy.get("sensitive_column_names", [])
+        str(name).casefold() for name in sql_policy.get("sensitive_column_names", [])
     }
     candidates: dict[str, ColumnCandidate] = {}
     for table_info in sql_context.get("tables", []) or []:

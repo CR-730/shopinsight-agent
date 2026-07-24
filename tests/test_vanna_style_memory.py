@@ -512,7 +512,6 @@ def test_anonymous_user_does_not_write_long_term_sql_memory():
             service,
             conversation=conversation,
             query="统计 GMV",
-            memory_query="统计 GMV",
             metadata_cache_version="meta-v1",
             final_state={
                 "sql": "select 1 as GMV",
@@ -529,5 +528,40 @@ def test_anonymous_user_does_not_write_long_term_sql_memory():
         assistant_message = conversation.messages[-1]
         assert assistant_message.metadata["result"] == [{"GMV": 1}]
         assert assistant_message.metadata["sql"] == "select 1 as GMV"
+
+    asyncio.run(run())
+
+
+def test_sql_memory_stores_rewritten_query_but_conversation_keeps_original_text():
+    class FakeAgentMemoryRepository:
+        def __init__(self) -> None:
+            self.saved_tool_usage = []
+
+        async def update_conversation(self, conversation):
+            return None
+
+        async def save_tool_usage(self, **kwargs):
+            self.saved_tool_usage.append(kwargs)
+
+    async def run():
+        repository = FakeAgentMemoryRepository()
+        service = SimpleNamespace(agent_memory_repository=repository)
+        conversation = Conversation(id="conv-1", user_id="user-1")
+
+        await QueryService._save_memory_after_query(
+            service,
+            conversation=conversation,
+            query="改成华南",
+            metadata_cache_version="meta-v1",
+            final_state={
+                "query": "统计华南地区的销售额",
+                "sql": "select sum(order_amount) from fact_order",
+                "output": {"rows": [{"销售额": 1}]},
+                "semantic_plan": _semantic_plan(),
+            },
+        )
+
+        assert conversation.messages[0].content == "改成华南"
+        assert repository.saved_tool_usage[0]["question"] == "统计华南地区的销售额"
 
     asyncio.run(run())

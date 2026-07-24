@@ -36,9 +36,7 @@ def _catalog() -> SemanticCandidateCatalog:
                 "fact_order.order_amount": _column(
                     "fact_order.order_amount", "decimal(18,2)"
                 ),
-                "dim_region.region_name": _column(
-                    "dim_region.region_name", "varchar"
-                ),
+                "dim_region.region_name": _column("dim_region.region_name", "varchar"),
             }
         ),
         relationships=MappingProxyType({}),
@@ -68,9 +66,7 @@ def _resolve(**changes):
     mention = NumericPredicateMention(**values)
     return resolve_numeric_predicate(
         mention,
-        NumericResolutionContext(
-            catalog=_catalog(), trusted_sources=(mention.raw_text,)
-        ),
+        NumericResolutionContext(catalog=_catalog()),
     )
 
 

@@ -30,7 +30,6 @@ def resolve_join_preferences(
     mentions: list[JoinMention],
     *,
     catalog: SemanticCandidateCatalog,
-    trusted_sources: tuple[str, ...],
 ) -> JoinPreferenceResolution:
     """Validate source spans, relationship IDs, direction, and conflicts."""
 
@@ -38,14 +37,7 @@ def resolve_join_preferences(
     issues: list[PlanningIssue] = []
     ambiguous = False
     for mention in mentions:
-        if not mention.raw_text or not any(
-            mention.raw_text in source for source in trusted_sources
-        ):
-            issues.append(_issue("untrusted_source_span", mention))
-            continue
-        relationship = catalog.relationships.get(
-            mention.relationship_candidate_id
-        )
+        relationship = catalog.relationships.get(mention.relationship_candidate_id)
         if relationship is None:
             issues.append(_issue("invalid_candidate_id", mention))
             continue
@@ -62,9 +54,7 @@ def resolve_join_preferences(
             relationship_candidate_id=mention.relationship_candidate_id,
             join_type=mention.join_type,
             left_table_candidate_id=(
-                mention.left_table_candidate_id
-                if mention.join_type == "left"
-                else None
+                mention.left_table_candidate_id if mention.join_type == "left" else None
             ),
         )
         existing = preferences.get(mention.relationship_candidate_id)

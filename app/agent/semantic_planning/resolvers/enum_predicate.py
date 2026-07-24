@@ -16,7 +16,6 @@ EnumResolutionStatus = Literal["resolved", "unresolved", "ambiguous", "failed"]
 @dataclass(frozen=True)
 class EnumResolutionContext:
     catalog: SemanticCandidateCatalog
-    trusted_sources: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -30,14 +29,6 @@ async def resolve_enum_predicate(
     mention: EnumPredicateMention,
     context: EnumResolutionContext,
 ) -> EnumPredicateResolution:
-    if not _is_trusted_span(mention.raw_text, context.trusted_sources):
-        return _blocked(
-            "unresolved",
-            "untrusted_source_span",
-            mention,
-            mention.value_candidate_ids,
-        )
-
     invalid_value_ids = _invalid_ids(
         mention.value_candidate_ids, context.catalog.values
     )
@@ -60,21 +51,15 @@ async def _resolve_catalog_values(
     values = [context.catalog.value_by_id(candidate_id) for candidate_id in value_ids]
     owning_columns = list(dict.fromkeys(value.column_id for value in values))
     if len(owning_columns) != 1:
-        return _blocked(
-            "ambiguous", "filter_column_ambiguous", mention, value_ids
-        )
+        return _blocked("ambiguous", "filter_column_ambiguous", mention, value_ids)
     column_id = owning_columns[0]
 
     if mention.operator_intent in {"eq", "neq"} and len(value_ids) != 1:
         return _blocked("ambiguous", "value_ambiguous", mention, value_ids)
 
-    canonical_values = list(
-        dict.fromkeys(value.canonical_value for value in values)
-    )
+    canonical_values = list(dict.fromkeys(value.canonical_value for value in values))
     if len(canonical_values) != len(values):
-        return _blocked(
-            "unresolved", "duplicate_value_candidate", mention, value_ids
-        )
+        return _blocked("unresolved", "duplicate_value_candidate", mention, value_ids)
 
     return EnumPredicateResolution(
         status="resolved",
@@ -110,10 +95,6 @@ def _invalid_ids(candidate_ids: list[str], catalog) -> list[str]:
         for candidate_id in dict.fromkeys(candidate_ids)
         if candidate_id not in catalog
     ]
-
-
-def _is_trusted_span(raw_text: str, trusted_sources: tuple[str, ...]) -> bool:
-    return bool(raw_text) and any(raw_text in source for source in trusted_sources)
 
 
 __all__ = [

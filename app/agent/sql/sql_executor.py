@@ -11,8 +11,6 @@ from pydantic import BaseModel, Field
 from app.agent.cached_clients import ainvoke_with_timeout
 from app.agent.sql.sql_guard import (
     normalize_sql_for_execution,
-    validate_sql_before_execution,
-    validate_sql_structure_semantics,
 )
 from app.conf.app_config import app_config
 
@@ -50,16 +48,6 @@ class SqlExecutor:
         sql = normalize_sql_for_execution(args.sql)
         audit = self._audit(sql=sql, status="running")
 
-        parse_or_structure_error = validate_sql_structure_semantics(state, sql)
-        if parse_or_structure_error:
-            audit.update(status="repairable_error", error_type="validation_error")
-            return SqlExecutionResult(
-                ok=False,
-                error=parse_or_structure_error,
-                status="repairable_error",
-                audit=audit,
-            )
-
         try:
             await self.dw_repository.validate(sql)
         except Exception as exc:
@@ -68,16 +56,6 @@ class SqlExecutor:
                 ok=False,
                 error=str(exc),
                 status="repairable_error",
-                audit=audit,
-            )
-
-        safety_error = validate_sql_before_execution(state, sql)
-        if safety_error:
-            audit.update(status="blocked", error_type="safety_error")
-            return SqlExecutionResult(
-                ok=False,
-                error=safety_error,
-                status="blocked",
                 audit=audit,
             )
 
