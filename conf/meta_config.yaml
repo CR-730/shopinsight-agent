@@ -182,9 +182,57 @@ metrics:
     relevant_columns:
       - fact_order.order_amount
     alias: [客单价, 平均单价, 平均订单金额]
+  - name: TOTAL_QUANTITY
+    description: 销售商品总件数，对订单中的商品购买数量求和。
+    aggregation: sum
+    relevant_columns:
+      - fact_order.order_quantity
+    alias: [销量, 销售件数, 商品销量, 售出件数, 销售数量]
+  - name: AVG_QUANTITY
+    description: 每笔订单平均购买件数，对订单中的商品购买数量求平均。
+    aggregation: avg
+    relevant_columns:
+      - fact_order.order_quantity
+    alias: [平均每单件数, 平均购买件数, 平均订单商品数]
+  - name: CUSTOMER_COUNT
+    description: 产生订单的去重客户数量。
+    aggregation: count_distinct
+    relevant_columns:
+      - fact_order.customer_id
+    alias: [客户数, 下单客户数, 购买客户数, 去重客户数]
+  - name: PRODUCT_COUNT
+    description: 产生订单的去重商品数量。
+    aggregation: count_distinct
+    relevant_columns:
+      - fact_order.product_id
+    alias: [商品数, 成交商品数, 有销量商品数, 去重商品数]
+  - name: MAX_ORDER_AMOUNT
+    description: 单笔订单金额的最大值。
+    aggregation: max
+    relevant_columns:
+      - fact_order.order_amount
+    alias: [最高订单金额, 最大订单金额, 单笔最高金额]
+  - name: MIN_ORDER_AMOUNT
+    description: 单笔订单金额的最小值。
+    aggregation: min
+    relevant_columns:
+      - fact_order.order_amount
+    alias: [最低订单金额, 最小订单金额, 单笔最低金额]
+  - name: AVG_ITEM_PRICE
+    description: 总成交金额除以销售商品总件数，表示每件商品的平均成交金额。
+    aggregation: expression
+    expression: SUM(fact_order.order_amount) / NULLIF(SUM(fact_order.order_quantity), 0)
+    relevant_columns:
+      - fact_order.order_amount
+      - fact_order.order_quantity
+    alias: [件均价, 平均每件成交价, 平均件单价]
 
 value_aliases:
   - column: dim_region.region_name
     aliases:
       北方: 华北
       北方区域: 华北
+  - column: dim_product.brand
+    aliases:
+      Apple: 苹果
+      Huawei: 华为

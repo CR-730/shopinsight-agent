@@ -3,6 +3,9 @@ import pytest
 from app.agent.cost import CostRates, CostTracker
 from app.agent.retrieval_context import (
     _search_values_by_vector,
+    build_route_retrieval_queries,
+    extract_retrieval_keywords,
+    recall_sql_memory_context,
     recall_value_context,
 )
 from app.entities.value_info import ValueInfo
@@ -14,6 +17,72 @@ class FakeEmbeddingClient:
     async def aembed_query(self, text: str):
         assert text == "华东"
         return [0.1, 0.2, 0.3]
+
+
+@pytest.mark.anyio
+async def test_retrieval_uses_only_the_rewritten_state_query(monkeypatch):
+    extracted_from = []
+
+    def fake_extract_tags(text, **kwargs):
+        extracted_from.append(text)
+        return []
+
+    monkeypatch.setattr(
+        "app.agent.retrieval_context.jieba.analyse.extract_tags",
+        fake_extract_tags,
+    )
+    state = {
+        "query": "统计华南地区的销售额",
+        "conversation_messages": [
+            {"role": "user", "content": "按地区统计销售额"},
+        ],
+    }
+
+    result = await extract_retrieval_keywords(state)
+
+    assert extracted_from == ["统计华南地区的销售额"]
+    assert "统计华南地区的销售额" in result["keywords"]
+
+
+def test_route_retrieval_queries_keep_full_query_without_jieba_keywords():
+    queries = build_route_retrieval_queries(
+        "统计2025年第一季度华北和华南各自的销售额",
+        ["地区", "区域", "地区", "销售额", "  "],
+    )
+
+    assert queries == [
+        "统计2025年第一季度华北和华南各自的销售额",
+        "地区",
+        "区域",
+        "销售额",
+    ]
+
+
+@pytest.mark.anyio
+async def test_sql_memory_recall_uses_only_the_rewritten_state_query():
+    class MemoryRepository:
+        query = None
+
+        async def search_similar_usage(self, query, **kwargs):
+            self.query = query
+            return []
+
+    repository = MemoryRepository()
+    await recall_sql_memory_context(
+        {
+            "query": "统计华南地区的销售额",
+            "conversation_messages": [
+                {"role": "user", "content": "按地区统计销售额"},
+            ],
+        },
+        {
+            "user_id": "user-1",
+            "agent_memory_repository": repository,
+            "metadata_cache_version": "v1",
+        },
+    )
+
+    assert repository.query == "统计华南地区的销售额"
 
 
 class FakeValueQdrantRepository:

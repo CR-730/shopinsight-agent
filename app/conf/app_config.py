@@ -118,6 +118,7 @@ class AgentConfig:
     max_sql_correction_attempts: int = 2
     embedding_timeout_seconds: int = 30
     retrieval_timeout_seconds: int = 30
+    retrieval_candidate_limit: int = 5
     sql_execution_timeout_seconds: int = 60
     value_hybrid_es_weight: float = 1.2
     value_hybrid_vector_weight: float = 1.0
@@ -249,9 +250,7 @@ app_config = AppConfig(
         base_url=_get_env("LLM_BASE_URL"),
         timeout_seconds=int(_get_env("LLM_TIMEOUT_SECONDS")),
         structured_enable_thinking=_get_bool_env("LLM_STRUCTURED_ENABLE_THINKING"),
-        generate_sql_enable_thinking=_get_bool_env(
-            "LLM_GENERATE_SQL_ENABLE_THINKING"
-        ),
+        generate_sql_enable_thinking=_get_bool_env("LLM_GENERATE_SQL_ENABLE_THINKING"),
         correct_sql_enable_thinking=_get_bool_env("LLM_CORRECT_SQL_ENABLE_THINKING"),
         input_per_1m_tokens=float(_get_env("LLM_INPUT_PER_1M_TOKENS")),
         output_per_1m_tokens=float(_get_env("LLM_OUTPUT_PER_1M_TOKENS")),

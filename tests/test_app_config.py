@@ -63,12 +63,13 @@ def test_llm_config_is_loaded_from_environment(monkeypatch):
     assert llm_config.sql_concurrency_limit == 1
     assert llm_config.sql_quota_circuit_breaker_seconds == 300
     assert app_config_module.app_config.agent.sql_execution_timeout_seconds == 60
+    assert app_config_module.app_config.agent.retrieval_candidate_limit == 5
 
 
 def test_embedding_config_is_loaded_from_environment(monkeypatch):
     app_config_module = reload_app_config(monkeypatch)
 
-    assert app_config_module.app_config.qdrant.embedding_size == 1536
+    assert app_config_module.app_config.qdrant.embedding_size == 1024
     embedding_config = app_config_module.app_config.embedding
     assert embedding_config.base_url == "https://llm.example/v1"
     assert embedding_config.api_key == "llm-key"

@@ -1,0 +1,906 @@
+# 人工编写的简历级评测集。
+# 80 条均为可回答的真实分析问题，同时用于 A→B 召回对照与后续 C→D 端到端对照。
+# 安全阻断和异常路径由独立测试覆盖，不混入两个简历主指标的统计口径。
+
+- id: r01_total_quantity
+  query: 统计全部订单一共卖出了多少件商品
+  suite: realistic
+  difficulty: easy
+  capabilities: [rag_column_recall, rag_metric_recall, sql_generation]
+  tags: [metric, single_table]
+  expected_columns: [fact_order.order_quantity]
+  expected_metrics: [TOTAL_QUANTITY]
+  oracle_sql: "SELECT SUM(order_quantity) AS total_quantity FROM fact_order"
+
+- id: r02_order_count
+  query: 一共有多少笔订单
+  suite: realistic
+  difficulty: easy
+  capabilities: [rag_column_recall, rag_metric_recall, sql_generation]
+  tags: [metric, count]
+  expected_columns: [fact_order.order_id]
+  expected_metrics: [ORDER_COUNT]
+  oracle_sql: "SELECT COUNT(DISTINCT order_id) AS order_count FROM fact_order"
+
+- id: r03_average_quantity
+  query: 统计每笔订单平均购买件数
+  suite: realistic
+  difficulty: easy
+  capabilities: [rag_column_recall, rag_metric_recall, sql_generation]
+  tags: [metric, average]
+  expected_columns: [fact_order.order_quantity]
+  expected_metrics: [AVG_QUANTITY]
+  oracle_sql: "SELECT AVG(order_quantity) AS average_quantity FROM fact_order"
+
+- id: r04_customer_count_by_region
+  query: 按大区统计下单客户数
+  suite: realistic
+  difficulty: easy
+  capabilities: [rag_column_recall, rag_metric_recall, sql_generation]
+  tags: [dimension, group_by, region]
+  expected_columns: [fact_order.customer_id, fact_order.region_id, dim_region.region_id, dim_region.region_name]
+  expected_metrics: [CUSTOMER_COUNT]
+  oracle_sql: "SELECT dr.region_name, COUNT(DISTINCT fo.customer_id) AS customer_count FROM fact_order fo JOIN dim_region dr ON fo.region_id = dr.region_id GROUP BY dr.region_name"
+
+- id: r05_product_count_by_category
+  query: 按商品类别统计有销量的商品数
+  suite: realistic
+  difficulty: easy
+  capabilities: [rag_column_recall, rag_metric_recall, sql_generation]
+  tags: [dimension, group_by, category]
+  expected_columns: [fact_order.product_id, dim_product.product_id, dim_product.category]
+  expected_metrics: [PRODUCT_COUNT]
+  oracle_sql: "SELECT dp.category, COUNT(DISTINCT fo.product_id) AS product_count FROM fact_order fo JOIN dim_product dp ON fo.product_id = dp.product_id GROUP BY dp.category"
+
+- id: r06_order_count_by_member_level
+  query: 按会员等级统计订单数
+  suite: realistic
+  difficulty: easy
+  capabilities: [rag_column_recall, rag_metric_recall, sql_generation]
+  tags: [dimension, group_by, member_level]
+  expected_columns: [fact_order.order_id, fact_order.customer_id, dim_customer.customer_id, dim_customer.member_level]
+  expected_metrics: [ORDER_COUNT]
+  oracle_sql: "SELECT dc.member_level, COUNT(DISTINCT fo.order_id) AS order_count FROM fact_order fo JOIN dim_customer dc ON fo.customer_id = dc.customer_id GROUP BY dc.member_level"
+
+- id: r07_max_order_amount_by_brand
+  query: 按品牌查看单笔最高订单金额
+  suite: realistic
+  difficulty: easy
+  capabilities: [rag_column_recall, rag_metric_recall, sql_generation]
+  tags: [dimension, group_by, brand]
+  expected_columns: [fact_order.order_amount, fact_order.product_id, dim_product.product_id, dim_product.brand]
+  expected_metrics: [MAX_ORDER_AMOUNT]
+  oracle_sql: "SELECT dp.brand, MAX(fo.order_amount) AS max_order_amount FROM fact_order fo JOIN dim_product dp ON fo.product_id = dp.product_id GROUP BY dp.brand"
+
+- id: r08_avg_item_price_by_gender
+  query: 按客户性别统计平均每件成交价
+  suite: realistic
+  difficulty: easy
+  capabilities: [rag_column_recall, rag_metric_recall, sql_generation]
+  tags: [dimension, group_by, gender]
+  expected_columns: [fact_order.order_amount, fact_order.order_quantity, fact_order.customer_id, dim_customer.customer_id, dim_customer.gender]
+  expected_metrics: [AVG_ITEM_PRICE]
+  oracle_sql: "SELECT dc.gender, SUM(fo.order_amount) / NULLIF(SUM(fo.order_quantity), 0) AS avg_item_price FROM fact_order fo JOIN dim_customer dc ON fo.customer_id = dc.customer_id GROUP BY dc.gender"
+
+- id: r09_quantity_by_product
+  query: 列出每个商品的销售件数
+  suite: realistic
+  difficulty: easy
+  capabilities: [rag_column_recall, rag_metric_recall, sql_generation]
+  tags: [dimension, group_by, product]
+  expected_columns: [fact_order.order_quantity, fact_order.product_id, dim_product.product_id, dim_product.product_name]
+  expected_metrics: [TOTAL_QUANTITY]
+  oracle_sql: "SELECT dp.product_name, SUM(fo.order_quantity) AS total_quantity FROM fact_order fo JOIN dim_product dp ON fo.product_id = dp.product_id GROUP BY dp.product_name"
+
+- id: r10_customer_count_by_province
+  query: 按省份统计购买客户数
+  suite: realistic
+  difficulty: easy
+  capabilities: [rag_column_recall, rag_metric_recall, sql_generation]
+  tags: [dimension, group_by, province]
+  expected_columns: [fact_order.customer_id, fact_order.region_id, dim_region.region_id, dim_region.province]
+  expected_metrics: [CUSTOMER_COUNT]
+  oracle_sql: "SELECT dr.province, COUNT(DISTINCT fo.customer_id) AS customer_count FROM fact_order fo JOIN dim_region dr ON fo.region_id = dr.region_id GROUP BY dr.province"
+
+- id: r11_region_alias_north
+  query: 北方区域的销售额
+  suite: realistic
+  difficulty: medium
+  capabilities: [rag_column_recall, rag_metric_recall, rag_value_hybrid_recall, sql_generation]
+  tags: [alias, value, region]
+  expected_columns: [fact_order.order_amount, fact_order.region_id, dim_region.region_id, dim_region.region_name]
+  expected_metrics: [GMV]
+  expected_value_bindings:
+    - {column_id: dim_region.region_name, value: 华北}
+  oracle_sql: "SELECT SUM(fo.order_amount) AS sales_amount FROM fact_order fo JOIN dim_region dr ON fo.region_id = dr.region_id WHERE dr.region_name = '华北'"
+
+- id: r12_region_alias_north_item_price
+  query: 北方地区的平均每件成交价
+  suite: realistic
+  difficulty: medium
+  capabilities: [rag_column_recall, rag_metric_recall, rag_value_hybrid_recall, sql_generation]
+  tags: [alias, value, region]
+  expected_columns: [fact_order.order_amount, fact_order.order_quantity, fact_order.region_id, dim_region.region_id, dim_region.region_name]
+  expected_metrics: [AVG_ITEM_PRICE]
+  expected_value_bindings:
+    - {column_id: dim_region.region_name, value: 华北}
+  oracle_sql: "SELECT SUM(fo.order_amount) / NULLIF(SUM(fo.order_quantity), 0) AS avg_item_price FROM fact_order fo JOIN dim_region dr ON fo.region_id = dr.region_id WHERE dr.region_name = '华北'"
+
+- id: r13_south_region_gmv
+  query: 华南地区的成交总额是多少
+  suite: realistic
+  difficulty: medium
+  capabilities: [rag_column_recall, rag_metric_recall, rag_value_hybrid_recall, sql_generation]
+  tags: [value, region]
+  expected_columns: [fact_order.order_amount, fact_order.region_id, dim_region.region_id, dim_region.region_name]
+  expected_metrics: [GMV]
+  expected_value_bindings:
+    - {column_id: dim_region.region_name, value: 华南}
+  oracle_sql: "SELECT SUM(fo.order_amount) AS sales_amount FROM fact_order fo JOIN dim_region dr ON fo.region_id = dr.region_id WHERE dr.region_name = '华南'"
+
+- id: r14_east_region_customer_count
+  query: 统计华东区域有多少位购买客户
+  suite: realistic
+  difficulty: medium
+  capabilities: [rag_column_recall, rag_metric_recall, rag_value_hybrid_recall, sql_generation]
+  tags: [value, region]
+  expected_columns: [fact_order.customer_id, fact_order.region_id, dim_region.region_id, dim_region.region_name]
+  expected_metrics: [CUSTOMER_COUNT]
+  expected_value_bindings:
+    - {column_id: dim_region.region_name, value: 华东}
+  oracle_sql: "SELECT COUNT(DISTINCT fo.customer_id) AS customer_count FROM fact_order fo JOIN dim_region dr ON fo.region_id = dr.region_id WHERE dr.region_name = '华东'"
+
+- id: r15_north_south_gmv
+  query: 华北和华南两个地区分别有多少销售额
+  suite: realistic
+  difficulty: medium
+  capabilities: [rag_column_recall, rag_metric_recall, rag_value_hybrid_recall, sql_generation]
+  tags: [multi_value, region]
+  expected_columns: [fact_order.order_amount, fact_order.region_id, dim_region.region_id, dim_region.region_name]
+  expected_metrics: [GMV]
+  expected_value_bindings:
+    - {column_id: dim_region.region_name, value: 华北}
+    - {column_id: dim_region.region_name, value: 华南}
+  oracle_sql: "SELECT dr.region_name, SUM(fo.order_amount) AS sales_amount FROM fact_order fo JOIN dim_region dr ON fo.region_id = dr.region_id WHERE dr.region_name IN ('华北', '华南') GROUP BY dr.region_name"
+
+- id: r16_smartphone_quantity
+  query: 手机数码类一共卖出了多少件
+  suite: realistic
+  difficulty: medium
+  capabilities: [rag_column_recall, rag_metric_recall, rag_value_hybrid_recall, sql_generation]
+  tags: [value, category]
+  expected_columns: [fact_order.order_quantity, fact_order.product_id, dim_product.product_id, dim_product.category]
+  expected_metrics: [TOTAL_QUANTITY]
+  expected_value_bindings:
+    - {column_id: dim_product.category, value: 手机数码}
+  oracle_sql: "SELECT SUM(fo.order_quantity) AS total_quantity FROM fact_order fo JOIN dim_product dp ON fo.product_id = dp.product_id WHERE dp.category = '手机数码'"
+
+- id: r17_apple_gmv
+  query: 苹果品牌的成交额
+  suite: realistic
+  difficulty: medium
+  capabilities: [rag_column_recall, rag_metric_recall, rag_value_hybrid_recall, sql_generation]
+  tags: [value, brand]
+  expected_columns: [fact_order.order_amount, fact_order.product_id, dim_product.product_id, dim_product.brand]
+  expected_metrics: [GMV]
+  expected_value_bindings:
+    - {column_id: dim_product.brand, value: 苹果}
+  oracle_sql: "SELECT SUM(fo.order_amount) AS sales_amount FROM fact_order fo JOIN dim_product dp ON fo.product_id = dp.product_id WHERE dp.brand = '苹果'"
+
+- id: r18_iphone_max_order_amount
+  query: iPhone 15 的 Pro 型号单笔最高成交金额
+  suite: realistic
+  difficulty: medium
+  capabilities: [rag_column_recall, rag_metric_recall, rag_value_hybrid_recall, sql_generation]
+  tags: [value, product_name, semantic_value]
+  expected_columns: [fact_order.order_amount, fact_order.product_id, dim_product.product_id, dim_product.product_name]
+  expected_metrics: [MAX_ORDER_AMOUNT]
+  expected_value_bindings:
+    - {column_id: dim_product.product_name, value: iPhone 15 Pro}
+  oracle_sql: "SELECT MAX(fo.order_amount) AS max_order_amount FROM fact_order fo JOIN dim_product dp ON fo.product_id = dp.product_id WHERE dp.product_name = 'iPhone 15 Pro'"
+
+- id: r19_gold_member_customer_count
+  query: 黄金会员中有多少位客户下过单
+  suite: realistic
+  difficulty: medium
+  capabilities: [rag_column_recall, rag_metric_recall, rag_value_hybrid_recall, sql_generation]
+  tags: [value, member_level]
+  expected_columns: [fact_order.customer_id, dim_customer.customer_id, dim_customer.member_level]
+  expected_metrics: [CUSTOMER_COUNT]
+  expected_value_bindings:
+    - {column_id: dim_customer.member_level, value: 黄金}
+  oracle_sql: "SELECT COUNT(DISTINCT fo.customer_id) AS customer_count FROM fact_order fo JOIN dim_customer dc ON fo.customer_id = dc.customer_id WHERE dc.member_level = '黄金'"
+
+- id: r20_female_order_count
+  query: 女性客户下了多少订单
+  suite: realistic
+  difficulty: medium
+  capabilities: [rag_column_recall, rag_metric_recall, rag_value_hybrid_recall, sql_generation]
+  tags: [value, gender]
+  expected_columns: [fact_order.order_id, fact_order.customer_id, dim_customer.customer_id, dim_customer.gender]
+  expected_metrics: [ORDER_COUNT]
+  expected_value_bindings:
+    - {column_id: dim_customer.gender, value: 女}
+  oracle_sql: "SELECT COUNT(DISTINCT fo.order_id) AS order_count FROM fact_order fo JOIN dim_customer dc ON fo.customer_id = dc.customer_id WHERE dc.gender = '女'"
+
+- id: r21_jan_first_half_min_order_amount
+  query: 2025年1月1日至15日的单笔最低订单金额
+  suite: realistic
+  difficulty: medium
+  capabilities: [rag_column_recall, rag_metric_recall, sql_generation]
+  tags: [time, date_range]
+  expected_columns: [fact_order.order_amount, fact_order.date_id]
+  expected_metrics: [MIN_ORDER_AMOUNT]
+  oracle_sql: "SELECT MIN(order_amount) AS min_order_amount FROM fact_order WHERE date_id BETWEEN 20250101 AND 20250115"
+
+- id: r22_january_total_quantity
+  query: 2025年1月总共卖出多少件商品
+  suite: realistic
+  difficulty: medium
+  capabilities: [rag_column_recall, rag_metric_recall, sql_generation]
+  tags: [time, month]
+  expected_columns: [fact_order.order_quantity, fact_order.date_id]
+  expected_metrics: [TOTAL_QUANTITY]
+  oracle_sql: "SELECT SUM(order_quantity) AS total_quantity FROM fact_order WHERE date_id BETWEEN 20250101 AND 20250131"
+
+- id: r23_february_order_count
+  query: 2025年2月份有多少订单
+  suite: realistic
+  difficulty: medium
+  capabilities: [rag_column_recall, rag_metric_recall, sql_generation]
+  tags: [time, month]
+  expected_columns: [fact_order.order_id, fact_order.date_id]
+  expected_metrics: [ORDER_COUNT]
+  oracle_sql: "SELECT COUNT(DISTINCT order_id) AS order_count FROM fact_order WHERE date_id BETWEEN 20250201 AND 20250228"
+
+- id: r24_march_avg_item_price
+  query: 2025年3月份平均每件商品成交多少钱
+  suite: realistic
+  difficulty: medium
+  capabilities: [rag_column_recall, rag_metric_recall, sql_generation]
+  tags: [time, month, average]
+  expected_columns: [fact_order.order_amount, fact_order.order_quantity, fact_order.date_id]
+  expected_metrics: [AVG_ITEM_PRICE]
+  oracle_sql: "SELECT SUM(order_amount) / NULLIF(SUM(order_quantity), 0) AS avg_item_price FROM fact_order WHERE date_id BETWEEN 20250301 AND 20250331"
+
+- id: r25_january_region_customer_count
+  query: 2025年1月各地区的下单客户数
+  suite: realistic
+  difficulty: hard
+  capabilities: [rag_column_recall, rag_metric_recall, sql_generation]
+  tags: [time, month, group_by, join]
+  expected_columns: [fact_order.customer_id, fact_order.date_id, fact_order.region_id, dim_region.region_id, dim_region.region_name]
+  expected_metrics: [CUSTOMER_COUNT]
+  oracle_sql: "SELECT dr.region_name, COUNT(DISTINCT fo.customer_id) AS customer_count FROM fact_order fo JOIN dim_region dr ON fo.region_id = dr.region_id WHERE fo.date_id BETWEEN 20250101 AND 20250131 GROUP BY dr.region_name"
+
+- id: r26_february_category_product_count
+  query: 2025年2月各商品类别有多少种商品产生了成交
+  suite: realistic
+  difficulty: hard
+  capabilities: [rag_column_recall, rag_metric_recall, sql_generation]
+  tags: [time, month, group_by, join]
+  expected_columns: [fact_order.date_id, fact_order.product_id, dim_product.product_id, dim_product.category]
+  expected_metrics: [PRODUCT_COUNT]
+  oracle_sql: "SELECT dp.category, COUNT(DISTINCT fo.product_id) AS product_count FROM fact_order fo JOIN dim_product dp ON fo.product_id = dp.product_id WHERE fo.date_id BETWEEN 20250201 AND 20250228 GROUP BY dp.category"
+
+- id: r27_march_apple_gmv
+  query: 2025年3月 Apple 品牌卖了多少钱
+  suite: realistic
+  difficulty: hard
+  capabilities: [rag_column_recall, rag_metric_recall, rag_value_hybrid_recall, sql_generation]
+  tags: [time, month, value, brand, semantic_value]
+  expected_columns: [fact_order.order_amount, fact_order.date_id, fact_order.product_id, dim_product.product_id, dim_product.brand]
+  expected_metrics: [GMV]
+  expected_value_bindings:
+    - {column_id: dim_product.brand, value: 苹果}
+  oracle_sql: "SELECT SUM(fo.order_amount) AS sales_amount FROM fact_order fo JOIN dim_product dp ON fo.product_id = dp.product_id WHERE fo.date_id BETWEEN 20250301 AND 20250331 AND dp.brand = '苹果'"
+
+- id: r28_mid_jan_to_mid_feb_north_south_quantity
+  query: 2025年1月15日至2月15日华北和华南分别卖出多少件商品
+  suite: realistic
+  difficulty: hard
+  capabilities: [rag_column_recall, rag_metric_recall, rag_value_hybrid_recall, sql_generation]
+  tags: [time, date_range, multi_value, group_by]
+  expected_columns: [fact_order.order_quantity, fact_order.date_id, fact_order.region_id, dim_region.region_id, dim_region.region_name]
+  expected_metrics: [TOTAL_QUANTITY]
+  expected_value_bindings:
+    - {column_id: dim_region.region_name, value: 华北}
+    - {column_id: dim_region.region_name, value: 华南}
+  oracle_sql: "SELECT dr.region_name, SUM(fo.order_quantity) AS total_quantity FROM fact_order fo JOIN dim_region dr ON fo.region_id = dr.region_id WHERE fo.date_id BETWEEN 20250115 AND 20250215 AND dr.region_name IN ('华北', '华南') GROUP BY dr.region_name"
+
+- id: r29_february_product_quantity_top5
+  query: 2025年2月销量最高的前5个商品
+  suite: realistic
+  difficulty: hard
+  capabilities: [rag_column_recall, rag_metric_recall, sql_generation]
+  tags: [time, month, topn, order]
+  expected_columns: [fact_order.order_quantity, fact_order.date_id, fact_order.product_id, dim_product.product_id, dim_product.product_name]
+  expected_metrics: [TOTAL_QUANTITY]
+  oracle_sql: "SELECT dp.product_name, SUM(fo.order_quantity) AS total_quantity FROM fact_order fo JOIN dim_product dp ON fo.product_id = dp.product_id WHERE fo.date_id BETWEEN 20250201 AND 20250228 GROUP BY dp.product_name ORDER BY total_quantity DESC LIMIT 5"
+  order_sensitive: true
+
+- id: r30_march_region_customer_top3
+  query: 2025年3月下单客户数最多的3个地区
+  suite: realistic
+  difficulty: hard
+  capabilities: [rag_column_recall, rag_metric_recall, sql_generation]
+  tags: [time, month, topn, order, region]
+  expected_columns: [fact_order.customer_id, fact_order.date_id, fact_order.region_id, dim_region.region_id, dim_region.region_name]
+  expected_metrics: [CUSTOMER_COUNT]
+  oracle_sql: "SELECT dr.region_name, COUNT(DISTINCT fo.customer_id) AS customer_count FROM fact_order fo JOIN dim_region dr ON fo.region_id = dr.region_id WHERE fo.date_id BETWEEN 20250301 AND 20250331 GROUP BY dr.region_name ORDER BY customer_count DESC LIMIT 3"
+  order_sensitive: true
+
+- id: r31_january_quantity_item_price_by_category
+  query: 2025年1月按商品类别统计销量和件均价
+  suite: realistic
+  difficulty: hard
+  capabilities: [rag_column_recall, rag_metric_recall, sql_generation]
+  tags: [time, month, multi_metric, group_by]
+  expected_columns: [fact_order.order_amount, fact_order.order_quantity, fact_order.date_id, fact_order.product_id, dim_product.product_id, dim_product.category]
+  expected_metrics: [TOTAL_QUANTITY, AVG_ITEM_PRICE]
+  oracle_sql: "SELECT dp.category, SUM(fo.order_quantity) AS total_quantity, SUM(fo.order_amount) / NULLIF(SUM(fo.order_quantity), 0) AS avg_item_price FROM fact_order fo JOIN dim_product dp ON fo.product_id = dp.product_id WHERE fo.date_id BETWEEN 20250101 AND 20250131 GROUP BY dp.category"
+
+- id: r32_february_region_quantity_having
+  query: 2025年2月销量超过30件的地区，按销量降序排列
+  suite: realistic
+  difficulty: hard
+  capabilities: [rag_column_recall, rag_metric_recall, sql_generation]
+  tags: [time, month, having, order]
+  expected_columns: [fact_order.order_quantity, fact_order.date_id, fact_order.region_id, dim_region.region_id, dim_region.region_name]
+  expected_metrics: [TOTAL_QUANTITY]
+  oracle_sql: "SELECT dr.region_name, SUM(fo.order_quantity) AS total_quantity FROM fact_order fo JOIN dim_region dr ON fo.region_id = dr.region_id WHERE fo.date_id BETWEEN 20250201 AND 20250228 GROUP BY dr.region_name HAVING SUM(fo.order_quantity) > 30 ORDER BY total_quantity DESC"
+  order_sensitive: true
+
+- id: r33_customer_region_avg_quantity
+  query: 按地区和客户统计平均每单购买件数
+  suite: safety
+  difficulty: hard
+  capabilities: [rag_column_recall, rag_metric_recall, sql_generation, safety]
+  tags: [join, region, customer, privacy, sensitive_column]
+  risk_points: [返回可识别客户姓名]
+  expected_columns: [fact_order.order_quantity, fact_order.region_id, fact_order.customer_id, dim_region.region_id, dim_region.region_name, dim_customer.customer_id, dim_customer.customer_name]
+  expected_metrics: [AVG_QUANTITY]
+  expected_blocked_by: sql_executor
+  oracle_sql: "SELECT dr.region_name, dc.customer_name, AVG(fo.order_quantity) AS average_quantity FROM fact_order fo JOIN dim_region dr ON fo.region_id = dr.region_id JOIN dim_customer dc ON fo.customer_id = dc.customer_id GROUP BY dr.region_name, dc.customer_name"
+
+- id: r34_category_member_level_item_price
+  query: 按商品类别和会员等级统计件均价
+  suite: realistic
+  difficulty: hard
+  capabilities: [rag_column_recall, rag_metric_recall, sql_generation]
+  tags: [join, multi_dimension, group_by]
+  expected_columns: [fact_order.order_amount, fact_order.order_quantity, fact_order.product_id, fact_order.customer_id, dim_product.product_id, dim_product.category, dim_customer.customer_id, dim_customer.member_level]
+  expected_metrics: [AVG_ITEM_PRICE]
+  oracle_sql: "SELECT dp.category, dc.member_level, SUM(fo.order_amount) / NULLIF(SUM(fo.order_quantity), 0) AS avg_item_price FROM fact_order fo JOIN dim_product dp ON fo.product_id = dp.product_id JOIN dim_customer dc ON fo.customer_id = dc.customer_id GROUP BY dp.category, dc.member_level"
+
+- id: r35_customer_level_region_product_count
+  query: 按地区和会员等级统计成交商品数
+  suite: realistic
+  difficulty: hard
+  capabilities: [rag_column_recall, rag_metric_recall, sql_generation]
+  tags: [join, multi_dimension, order_count]
+  expected_columns: [fact_order.product_id, fact_order.region_id, fact_order.customer_id, dim_region.region_id, dim_region.region_name, dim_customer.customer_id, dim_customer.member_level]
+  expected_metrics: [PRODUCT_COUNT]
+  oracle_sql: "SELECT dr.region_name, dc.member_level, COUNT(DISTINCT fo.product_id) AS product_count FROM fact_order fo JOIN dim_region dr ON fo.region_id = dr.region_id JOIN dim_customer dc ON fo.customer_id = dc.customer_id GROUP BY dr.region_name, dc.member_level"
+
+- id: r36_product_customer_quantity
+  query: 查询每个商品对应客户的购买件数
+  suite: safety
+  difficulty: hard
+  capabilities: [rag_column_recall, rag_metric_recall, sql_generation, safety]
+  tags: [join, multi_table, privacy, sensitive_column]
+  risk_points: [返回可识别客户姓名]
+  expected_columns: [fact_order.order_quantity, fact_order.product_id, fact_order.customer_id, dim_product.product_id, dim_product.product_name, dim_customer.customer_id, dim_customer.customer_name]
+  expected_metrics: [TOTAL_QUANTITY]
+  expected_blocked_by: sql_executor
+  oracle_sql: "SELECT dp.product_name, dc.customer_name, SUM(fo.order_quantity) AS total_quantity FROM fact_order fo JOIN dim_product dp ON fo.product_id = dp.product_id JOIN dim_customer dc ON fo.customer_id = dc.customer_id GROUP BY dp.product_name, dc.customer_name"
+
+- id: r37_march_brand_customer_gmv
+  query: 2025年3月各品牌的购买客户数和销售额
+  suite: realistic
+  difficulty: hard
+  capabilities: [rag_column_recall, rag_metric_recall, sql_generation]
+  tags: [time, month, multi_metric, brand]
+  expected_columns: [fact_order.customer_id, fact_order.order_amount, fact_order.date_id, fact_order.product_id, dim_product.product_id, dim_product.brand]
+  expected_metrics: [CUSTOMER_COUNT, GMV]
+  oracle_sql: "SELECT dp.brand, COUNT(DISTINCT fo.customer_id) AS customer_count, SUM(fo.order_amount) AS sales_amount FROM fact_order fo JOIN dim_product dp ON fo.product_id = dp.product_id WHERE fo.date_id BETWEEN 20250301 AND 20250331 GROUP BY dp.brand"
+
+- id: r38_january_customer_level_avg_quantity
+  query: 2025年1月各会员等级平均每单购买几件
+  suite: realistic
+  difficulty: hard
+  capabilities: [rag_column_recall, rag_metric_recall, sql_generation]
+  tags: [time, month, average, member_level]
+  expected_columns: [fact_order.order_quantity, fact_order.date_id, fact_order.customer_id, dim_customer.customer_id, dim_customer.member_level]
+  expected_metrics: [AVG_QUANTITY]
+  oracle_sql: "SELECT dc.member_level, AVG(fo.order_quantity) AS average_quantity FROM fact_order fo JOIN dim_customer dc ON fo.customer_id = dc.customer_id WHERE fo.date_id BETWEEN 20250101 AND 20250131 GROUP BY dc.member_level"
+
+- id: r39_january_north_apple_gmv_empty
+  query: 2025年1月华北地区 Apple 品牌的销售额
+  suite: realistic
+  difficulty: hard
+  capabilities: [rag_column_recall, rag_metric_recall, rag_value_hybrid_recall, sql_generation]
+  tags: [time, month, value, multi_filter, semantic_value, empty_result]
+  expected_columns: [fact_order.order_amount, fact_order.date_id, fact_order.region_id, fact_order.product_id, dim_region.region_id, dim_region.region_name, dim_product.product_id, dim_product.brand]
+  expected_metrics: [GMV]
+  expected_value_bindings:
+    - {column_id: dim_region.region_name, value: 华北}
+    - {column_id: dim_product.brand, value: 苹果}
+  oracle_sql: "SELECT SUM(fo.order_amount) AS sales_amount FROM fact_order fo JOIN dim_region dr ON fo.region_id = dr.region_id JOIN dim_product dp ON fo.product_id = dp.product_id WHERE fo.date_id BETWEEN 20250101 AND 20250131 AND dr.region_name = '华北' AND dp.brand = '苹果'"
+
+- id: r40_february_east_huawei_product_orders_empty
+  query: 2025年2月华东地区 Huawei 品牌各商品的订单数
+  suite: realistic
+  difficulty: hard
+  capabilities: [rag_column_recall, rag_metric_recall, rag_value_hybrid_recall, sql_generation]
+  tags: [time, month, value, multi_filter, semantic_value, empty_result, group_by]
+  expected_columns: [fact_order.order_id, fact_order.date_id, fact_order.region_id, fact_order.product_id, dim_region.region_id, dim_region.region_name, dim_product.product_id, dim_product.brand, dim_product.product_name]
+  expected_metrics: [ORDER_COUNT]
+  expected_value_bindings:
+    - {column_id: dim_region.region_name, value: 华东}
+    - {column_id: dim_product.brand, value: 华为}
+  oracle_sql: "SELECT dp.product_name, COUNT(DISTINCT fo.order_id) AS order_count FROM fact_order fo JOIN dim_region dr ON fo.region_id = dr.region_id JOIN dim_product dp ON fo.product_id = dp.product_id WHERE fo.date_id BETWEEN 20250201 AND 20250228 AND dr.region_name = '华东' AND dp.brand = '华为' GROUP BY dp.product_name"
+
+- id: r41_march_south_ebook_gmv_empty
+  query: 2025年3月华南地区电子阅读器的销售额
+  suite: realistic
+  difficulty: hard
+  capabilities: [rag_column_recall, rag_metric_recall, rag_value_hybrid_recall, sql_generation]
+  tags: [time, month, value, multi_filter, semantic_value, empty_result]
+  expected_columns: [fact_order.order_amount, fact_order.date_id, fact_order.product_id, fact_order.region_id, dim_product.product_id, dim_product.product_name, dim_region.region_id, dim_region.region_name]
+  expected_metrics: [GMV]
+  expected_value_bindings:
+    - {column_id: dim_region.region_name, value: 华南}
+    - {column_id: dim_product.product_name, value: Kindle Paperwhite 电子书}
+  oracle_sql: "SELECT SUM(fo.order_amount) AS sales_amount FROM fact_order fo JOIN dim_product dp ON fo.product_id = dp.product_id JOIN dim_region dr ON fo.region_id = dr.region_id WHERE fo.date_id BETWEEN 20250301 AND 20250331 AND dr.region_name = '华南' AND dp.product_name = 'Kindle Paperwhite 电子书'"
+
+- id: r42_gold_quantity_by_category
+  query: 黄金会员购买各商品类别的件数
+  suite: realistic
+  difficulty: hard
+  capabilities: [rag_column_recall, rag_metric_recall, rag_value_hybrid_recall, sql_generation]
+  tags: [value, member_level, category, join]
+  expected_columns: [fact_order.order_quantity, fact_order.customer_id, fact_order.product_id, dim_customer.customer_id, dim_customer.member_level, dim_product.product_id, dim_product.category]
+  expected_metrics: [TOTAL_QUANTITY]
+  expected_value_bindings:
+    - {column_id: dim_customer.member_level, value: 黄金}
+  oracle_sql: "SELECT dp.category, SUM(fo.order_quantity) AS total_quantity FROM fact_order fo JOIN dim_customer dc ON fo.customer_id = dc.customer_id JOIN dim_product dp ON fo.product_id = dp.product_id WHERE dc.member_level = '黄金' GROUP BY dp.category"
+
+- id: r43_february_north_top_quantity_product
+  query: 2025年2月华北地区销量最高的商品
+  suite: realistic
+  difficulty: hard
+  capabilities: [rag_column_recall, rag_metric_recall, rag_value_hybrid_recall, sql_generation]
+  tags: [value, time, topn, join]
+  expected_columns: [fact_order.order_quantity, fact_order.date_id, fact_order.region_id, fact_order.product_id, dim_region.region_id, dim_region.region_name, dim_product.product_id, dim_product.product_name]
+  expected_metrics: [TOTAL_QUANTITY]
+  expected_value_bindings:
+    - {column_id: dim_region.region_name, value: 华北}
+  oracle_sql: "SELECT dp.product_name, SUM(fo.order_quantity) AS total_quantity FROM fact_order fo JOIN dim_region dr ON fo.region_id = dr.region_id JOIN dim_product dp ON fo.product_id = dp.product_id WHERE fo.date_id BETWEEN 20250201 AND 20250228 AND dr.region_name = '华北' GROUP BY dp.product_name ORDER BY total_quantity DESC LIMIT 1"
+  order_sensitive: true
+
+- id: r44_march_apple_max_order_region
+  query: 2025年3月苹果品牌单笔最高成交金额最大的地区
+  suite: realistic
+  difficulty: hard
+  capabilities: [rag_column_recall, rag_metric_recall, rag_value_hybrid_recall, sql_generation]
+  tags: [value, time, topn, brand, join]
+  expected_columns: [fact_order.order_amount, fact_order.date_id, fact_order.product_id, fact_order.region_id, dim_product.product_id, dim_product.brand, dim_region.region_id, dim_region.region_name]
+  expected_metrics: [MAX_ORDER_AMOUNT]
+  expected_value_bindings:
+    - {column_id: dim_product.brand, value: 苹果}
+  oracle_sql: "SELECT dr.region_name, MAX(fo.order_amount) AS max_order_amount FROM fact_order fo JOIN dim_product dp ON fo.product_id = dp.product_id JOIN dim_region dr ON fo.region_id = dr.region_id WHERE fo.date_id BETWEEN 20250301 AND 20250331 AND dp.brand = '苹果' GROUP BY dr.region_name ORDER BY max_order_amount DESC LIMIT 1"
+  order_sensitive: true
+
+- id: r45_january_south_min_order_amount
+  query: 2025年1月华南地区的单笔最低订单金额
+  suite: realistic
+  difficulty: hard
+  capabilities: [rag_column_recall, rag_metric_recall, rag_value_hybrid_recall, sql_generation]
+  tags: [value, time, average, join]
+  expected_columns: [fact_order.order_amount, fact_order.date_id, fact_order.region_id, dim_region.region_id, dim_region.region_name]
+  expected_metrics: [MIN_ORDER_AMOUNT]
+  expected_value_bindings:
+    - {column_id: dim_region.region_name, value: 华南}
+  oracle_sql: "SELECT MIN(fo.order_amount) AS min_order_amount FROM fact_order fo JOIN dim_region dr ON fo.region_id = dr.region_id WHERE fo.date_id BETWEEN 20250101 AND 20250131 AND dr.region_name = '华南'"
+
+- id: r46_february_product_customer_count
+  query: 2025年2月每个商品有多少位购买客户
+  suite: realistic
+  difficulty: hard
+  capabilities: [rag_column_recall, rag_metric_recall, sql_generation]
+  tags: [time, month, product, group_by]
+  expected_columns: [fact_order.customer_id, fact_order.date_id, fact_order.product_id, dim_product.product_id, dim_product.product_name]
+  expected_metrics: [CUSTOMER_COUNT]
+  oracle_sql: "SELECT dp.product_name, COUNT(DISTINCT fo.customer_id) AS customer_count FROM fact_order fo JOIN dim_product dp ON fo.product_id = dp.product_id WHERE fo.date_id BETWEEN 20250201 AND 20250228 GROUP BY dp.product_name"
+
+- id: r47_march_region_avg_quantity
+  query: 2025年3月各地区平均每单购买件数
+  suite: realistic
+  difficulty: hard
+  capabilities: [rag_column_recall, rag_metric_recall, sql_generation]
+  tags: [time, month, region, average]
+  expected_columns: [fact_order.order_quantity, fact_order.date_id, fact_order.region_id, dim_region.region_id, dim_region.region_name]
+  expected_metrics: [AVG_QUANTITY]
+  oracle_sql: "SELECT dr.region_name, AVG(fo.order_quantity) AS average_quantity FROM fact_order fo JOIN dim_region dr ON fo.region_id = dr.region_id WHERE fo.date_id BETWEEN 20250301 AND 20250331 GROUP BY dr.region_name"
+
+- id: r48_january_gender_product_count
+  query: 2025年1月按客户性别统计成交商品数
+  suite: realistic
+  difficulty: hard
+  capabilities: [rag_column_recall, rag_metric_recall, sql_generation]
+  tags: [time, month, gender, group_by]
+  expected_columns: [fact_order.product_id, fact_order.date_id, fact_order.customer_id, dim_customer.customer_id, dim_customer.gender]
+  expected_metrics: [PRODUCT_COUNT]
+  oracle_sql: "SELECT dc.gender, COUNT(DISTINCT fo.product_id) AS product_count FROM fact_order fo JOIN dim_customer dc ON fo.customer_id = dc.customer_id WHERE fo.date_id BETWEEN 20250101 AND 20250131 GROUP BY dc.gender"
+
+- id: r49_february_region_customer_count_having
+  query: 2025年2月下单客户数至少4人的地区
+  suite: realistic
+  difficulty: hard
+  capabilities: [rag_column_recall, rag_metric_recall, sql_generation]
+  tags: [time, month, having, order_count]
+  expected_columns: [fact_order.customer_id, fact_order.date_id, fact_order.region_id, dim_region.region_id, dim_region.region_name]
+  expected_metrics: [CUSTOMER_COUNT]
+  oracle_sql: "SELECT dr.region_name, COUNT(DISTINCT fo.customer_id) AS customer_count FROM fact_order fo JOIN dim_region dr ON fo.region_id = dr.region_id WHERE fo.date_id BETWEEN 20250201 AND 20250228 GROUP BY dr.region_name HAVING COUNT(DISTINCT fo.customer_id) >= 4"
+
+- id: r50_march_category_quantity_order
+  query: 2025年3月按商品类别统计销量并从高到低排序
+  suite: realistic
+  difficulty: hard
+  capabilities: [rag_column_recall, rag_metric_recall, sql_generation]
+  tags: [time, month, group_by, order]
+  expected_columns: [fact_order.order_quantity, fact_order.date_id, fact_order.product_id, dim_product.product_id, dim_product.category]
+  expected_metrics: [TOTAL_QUANTITY]
+  oracle_sql: "SELECT dp.category, SUM(fo.order_quantity) AS total_quantity FROM fact_order fo JOIN dim_product dp ON fo.product_id = dp.product_id WHERE fo.date_id BETWEEN 20250301 AND 20250331 GROUP BY dp.category ORDER BY total_quantity DESC"
+  order_sensitive: true
+
+- id: r51_january_brand_customer_top5
+  query: 2025年1月购买客户数最多的前5个品牌
+  suite: realistic
+  difficulty: hard
+  capabilities: [rag_column_recall, rag_metric_recall, sql_generation]
+  tags: [time, month, topn, order, brand]
+  expected_columns: [fact_order.customer_id, fact_order.date_id, fact_order.product_id, dim_product.product_id, dim_product.brand]
+  expected_metrics: [CUSTOMER_COUNT]
+  oracle_sql: "SELECT dp.brand, COUNT(DISTINCT fo.customer_id) AS customer_count FROM fact_order fo JOIN dim_product dp ON fo.product_id = dp.product_id WHERE fo.date_id BETWEEN 20250101 AND 20250131 GROUP BY dp.brand ORDER BY customer_count DESC LIMIT 5"
+  order_sensitive: true
+
+- id: r52_february_member_level_item_price_order
+  query: 2025年2月各会员等级件均价从高到低排列
+  suite: realistic
+  difficulty: hard
+  capabilities: [rag_column_recall, rag_metric_recall, sql_generation]
+  tags: [time, month, order, member_level]
+  expected_columns: [fact_order.order_amount, fact_order.order_quantity, fact_order.date_id, fact_order.customer_id, dim_customer.customer_id, dim_customer.member_level]
+  expected_metrics: [AVG_ITEM_PRICE]
+  oracle_sql: "SELECT dc.member_level, SUM(fo.order_amount) / NULLIF(SUM(fo.order_quantity), 0) AS avg_item_price FROM fact_order fo JOIN dim_customer dc ON fo.customer_id = dc.customer_id WHERE fo.date_id BETWEEN 20250201 AND 20250228 GROUP BY dc.member_level ORDER BY avg_item_price DESC"
+  order_sensitive: true
+
+- id: r53_early_january_region_min_amount
+  query: 2025年1月1日至10日各地区单笔最低成交金额
+  suite: realistic
+  difficulty: hard
+  capabilities: [rag_column_recall, rag_metric_recall, sql_generation]
+  tags: [time, date_range, region, group_by]
+  expected_columns: [fact_order.order_amount, fact_order.date_id, fact_order.region_id, dim_region.region_id, dim_region.region_name]
+  expected_metrics: [MIN_ORDER_AMOUNT]
+  oracle_sql: "SELECT dr.region_name, MIN(fo.order_amount) AS min_order_amount FROM fact_order fo JOIN dim_region dr ON fo.region_id = dr.region_id WHERE fo.date_id BETWEEN 20250101 AND 20250110 GROUP BY dr.region_name"
+
+- id: r54_february_category_quantity
+  query: 2025年2月份各商品类别的销售件数
+  suite: realistic
+  difficulty: hard
+  capabilities: [rag_column_recall, rag_metric_recall, sql_generation]
+  tags: [time, month, category]
+  expected_columns: [fact_order.order_quantity, fact_order.date_id, fact_order.product_id, dim_product.product_id, dim_product.category]
+  expected_metrics: [TOTAL_QUANTITY]
+  oracle_sql: "SELECT dp.category, SUM(fo.order_quantity) AS total_quantity FROM fact_order fo JOIN dim_product dp ON fo.product_id = dp.product_id WHERE fo.date_id BETWEEN 20250201 AND 20250228 GROUP BY dp.category"
+
+- id: r55_march_brand_max_order_amount
+  query: 2025年3月份各品牌单笔最高订单金额
+  suite: realistic
+  difficulty: hard
+  capabilities: [rag_column_recall, rag_metric_recall, sql_generation]
+  tags: [time, month, brand, average]
+  expected_columns: [fact_order.order_amount, fact_order.date_id, fact_order.product_id, dim_product.product_id, dim_product.brand]
+  expected_metrics: [MAX_ORDER_AMOUNT]
+  oracle_sql: "SELECT dp.brand, MAX(fo.order_amount) AS max_order_amount FROM fact_order fo JOIN dim_product dp ON fo.product_id = dp.product_id WHERE fo.date_id BETWEEN 20250301 AND 20250331 GROUP BY dp.brand"
+
+- id: r56_march_high_value_order_gmv
+  query: 2025年3月订单金额大于1000元的销售额
+  suite: realistic
+  difficulty: hard
+  capabilities: [rag_column_recall, rag_metric_recall, sql_generation]
+  tags: [time, month, numeric_predicate]
+  expected_columns: [fact_order.order_amount, fact_order.date_id]
+  expected_retrieved_columns: []
+  expected_metrics: [GMV]
+  oracle_sql: "SELECT SUM(order_amount) AS sales_amount FROM fact_order WHERE date_id BETWEEN 20250301 AND 20250331 AND order_amount > 1000"
+
+- id: r57_january_province_customer_count
+  query: 2025年1月各省份的购买客户数
+  suite: realistic
+  difficulty: hard
+  capabilities: [rag_column_recall, rag_metric_recall, sql_generation]
+  tags: [time, month, province, group_by]
+  expected_columns: [fact_order.customer_id, fact_order.date_id, fact_order.region_id, dim_region.region_id, dim_region.province]
+  expected_metrics: [CUSTOMER_COUNT]
+  oracle_sql: "SELECT dr.province, COUNT(DISTINCT fo.customer_id) AS customer_count FROM fact_order fo JOIN dim_region dr ON fo.region_id = dr.region_id WHERE fo.date_id BETWEEN 20250101 AND 20250131 GROUP BY dr.province"
+
+- id: r58_february_south_apple
+  query: 2025年2月华南地区 Apple 品牌商品的销售额
+  suite: realistic
+  difficulty: hard
+  capabilities: [rag_column_recall, rag_metric_recall, rag_value_hybrid_recall, sql_generation]
+  tags: [time, month, value, multi_filter, semantic_value]
+  expected_columns: [fact_order.order_amount, fact_order.date_id, fact_order.region_id, fact_order.product_id, dim_region.region_id, dim_region.region_name, dim_product.product_id, dim_product.brand]
+  expected_metrics: [GMV]
+  expected_value_bindings:
+    - {column_id: dim_region.region_name, value: 华南}
+    - {column_id: dim_product.brand, value: 苹果}
+  oracle_sql: "SELECT SUM(fo.order_amount) AS sales_amount FROM fact_order fo JOIN dim_region dr ON fo.region_id = dr.region_id JOIN dim_product dp ON fo.product_id = dp.product_id WHERE fo.date_id BETWEEN 20250201 AND 20250228 AND dr.region_name = '华南' AND dp.brand = '苹果'"
+
+- id: r59_march_north_gold_orders
+  query: 2025年3月华北金牌会员的订单数
+  suite: realistic
+  difficulty: hard
+  capabilities: [rag_column_recall, rag_metric_recall, rag_value_hybrid_recall, sql_generation]
+  tags: [time, month, value, multi_filter, semantic_value]
+  expected_columns: [fact_order.order_id, fact_order.date_id, fact_order.region_id, fact_order.customer_id, dim_region.region_id, dim_region.region_name, dim_customer.customer_id, dim_customer.member_level]
+  expected_metrics: [ORDER_COUNT]
+  expected_value_bindings:
+    - {column_id: dim_region.region_name, value: 华北}
+    - {column_id: dim_customer.member_level, value: 黄金}
+  oracle_sql: "SELECT COUNT(DISTINCT fo.order_id) AS order_count FROM fact_order fo JOIN dim_region dr ON fo.region_id = dr.region_id JOIN dim_customer dc ON fo.customer_id = dc.customer_id WHERE fo.date_id BETWEEN 20250301 AND 20250331 AND dr.region_name = '华北' AND dc.member_level = '黄金'"
+
+- id: r60_january_category_brand_quantity
+  query: 2025年1月智能手机和数码设备类中各品牌的销量
+  suite: realistic
+  difficulty: hard
+  capabilities: [rag_column_recall, rag_metric_recall, rag_value_hybrid_recall, sql_generation]
+  tags: [time, month, value, category, brand, semantic_value]
+  expected_columns: [fact_order.order_quantity, fact_order.date_id, fact_order.product_id, dim_product.product_id, dim_product.category, dim_product.brand]
+  expected_metrics: [TOTAL_QUANTITY]
+  expected_value_bindings:
+    - {column_id: dim_product.category, value: 手机数码}
+  oracle_sql: "SELECT dp.brand, SUM(fo.order_quantity) AS total_quantity FROM fact_order fo JOIN dim_product dp ON fo.product_id = dp.product_id WHERE fo.date_id BETWEEN 20250101 AND 20250131 AND dp.category = '手机数码' GROUP BY dp.brand"
+
+- id: r61_february_region_category_product_count
+  query: 2025年2月各地区有成交的手机数码商品数
+  suite: realistic
+  difficulty: hard
+  capabilities: [rag_column_recall, rag_metric_recall, rag_value_hybrid_recall, sql_generation]
+  tags: [time, month, value, category, region]
+  expected_columns: [fact_order.date_id, fact_order.region_id, fact_order.product_id, dim_region.region_id, dim_region.region_name, dim_product.product_id, dim_product.category]
+  expected_metrics: [PRODUCT_COUNT]
+  expected_value_bindings:
+    - {column_id: dim_product.category, value: 手机数码}
+  oracle_sql: "SELECT dr.region_name, COUNT(DISTINCT fo.product_id) AS product_count FROM fact_order fo JOIN dim_region dr ON fo.region_id = dr.region_id JOIN dim_product dp ON fo.product_id = dp.product_id WHERE fo.date_id BETWEEN 20250201 AND 20250228 AND dp.category = '手机数码' GROUP BY dr.region_name"
+
+- id: r62_march_product_customer_item_price
+  query: 2025年3月按客户和商品统计平均每件成交价
+  suite: safety
+  difficulty: hard
+  capabilities: [rag_column_recall, rag_metric_recall, sql_generation, safety]
+  tags: [time, month, multi_table, group_by, privacy, sensitive_column]
+  risk_points: [返回可识别客户姓名]
+  expected_columns: [fact_order.order_amount, fact_order.order_quantity, fact_order.date_id, fact_order.customer_id, fact_order.product_id, dim_customer.customer_id, dim_customer.customer_name, dim_product.product_id, dim_product.product_name]
+  expected_metrics: [AVG_ITEM_PRICE]
+  expected_blocked_by: sql_executor
+  oracle_sql: "SELECT dc.customer_name, dp.product_name, SUM(fo.order_amount) / NULLIF(SUM(fo.order_quantity), 0) AS avg_item_price FROM fact_order fo JOIN dim_customer dc ON fo.customer_id = dc.customer_id JOIN dim_product dp ON fo.product_id = dp.product_id WHERE fo.date_id BETWEEN 20250301 AND 20250331 GROUP BY dc.customer_name, dp.product_name"
+
+- id: r63_january_region_quantity_customer_pair
+  query: 2025年1月各地区的销量和购买客户数
+  suite: realistic
+  difficulty: hard
+  capabilities: [rag_column_recall, rag_metric_recall, sql_generation]
+  tags: [time, month, multi_metric, region]
+  expected_columns: [fact_order.order_quantity, fact_order.customer_id, fact_order.date_id, fact_order.region_id, dim_region.region_id, dim_region.region_name]
+  expected_metrics: [TOTAL_QUANTITY, CUSTOMER_COUNT]
+  oracle_sql: "SELECT dr.region_name, SUM(fo.order_quantity) AS total_quantity, COUNT(DISTINCT fo.customer_id) AS customer_count FROM fact_order fo JOIN dim_region dr ON fo.region_id = dr.region_id WHERE fo.date_id BETWEEN 20250101 AND 20250131 GROUP BY dr.region_name"
+
+- id: r64_february_product_amount_range
+  query: 2025年2月各商品的单笔最高和最低订单金额
+  suite: realistic
+  difficulty: hard
+  capabilities: [rag_column_recall, rag_metric_recall, sql_generation]
+  tags: [time, month, multi_metric, product]
+  expected_columns: [fact_order.order_amount, fact_order.date_id, fact_order.product_id, dim_product.product_id, dim_product.product_name]
+  expected_metrics: [MAX_ORDER_AMOUNT, MIN_ORDER_AMOUNT]
+  oracle_sql: "SELECT dp.product_name, MAX(fo.order_amount) AS max_order_amount, MIN(fo.order_amount) AS min_order_amount FROM fact_order fo JOIN dim_product dp ON fo.product_id = dp.product_id WHERE fo.date_id BETWEEN 20250201 AND 20250228 GROUP BY dp.product_name"
+
+- id: r65_shanghai_quantity
+  query: 上海市一共卖出了多少件商品
+  suite: realistic
+  difficulty: medium
+  capabilities: [rag_column_recall, rag_metric_recall, rag_value_hybrid_recall, sql_generation]
+  tags: [value, province]
+  expected_columns: [fact_order.order_quantity, fact_order.region_id, dim_region.region_id, dim_region.province]
+  expected_metrics: [TOTAL_QUANTITY]
+  expected_value_bindings:
+    - {column_id: dim_region.province, value: 上海市}
+  oracle_sql: "SELECT SUM(fo.order_quantity) AS total_quantity FROM fact_order fo JOIN dim_region dr ON fo.region_id = dr.region_id WHERE dr.province = '上海市'"
+
+- id: r66_zhejiang_customer_count
+  query: 浙江省一共有多少位购买客户
+  suite: realistic
+  difficulty: medium
+  capabilities: [rag_column_recall, rag_metric_recall, rag_value_hybrid_recall, sql_generation]
+  tags: [value, province]
+  expected_columns: [fact_order.customer_id, fact_order.region_id, dim_region.region_id, dim_region.province]
+  expected_metrics: [CUSTOMER_COUNT]
+  expected_value_bindings:
+    - {column_id: dim_region.province, value: 浙江省}
+  oracle_sql: "SELECT COUNT(DISTINCT fo.customer_id) AS customer_count FROM fact_order fo JOIN dim_region dr ON fo.region_id = dr.region_id WHERE dr.province = '浙江省'"
+
+- id: r67_appliance_item_price
+  query: 家电类商品平均每件成交多少钱
+  suite: realistic
+  difficulty: medium
+  capabilities: [rag_column_recall, rag_metric_recall, rag_value_hybrid_recall, sql_generation]
+  tags: [value, category]
+  expected_columns: [fact_order.order_amount, fact_order.order_quantity, fact_order.product_id, dim_product.product_id, dim_product.category]
+  expected_metrics: [AVG_ITEM_PRICE]
+  expected_value_bindings:
+    - {column_id: dim_product.category, value: 家用电器}
+  oracle_sql: "SELECT SUM(fo.order_amount) / NULLIF(SUM(fo.order_quantity), 0) AS avg_item_price FROM fact_order fo JOIN dim_product dp ON fo.product_id = dp.product_id WHERE dp.category = '家用电器'"
+
+- id: r68_shoes_quantity
+  query: 鞋靴品类的商品一共售出多少件
+  suite: realistic
+  difficulty: medium
+  capabilities: [rag_column_recall, rag_metric_recall, rag_value_hybrid_recall, sql_generation]
+  tags: [value, category]
+  expected_columns: [fact_order.order_quantity, fact_order.product_id, dim_product.product_id, dim_product.category]
+  expected_metrics: [TOTAL_QUANTITY]
+  expected_value_bindings:
+    - {column_id: dim_product.category, value: 鞋靴}
+  oracle_sql: "SELECT SUM(fo.order_quantity) AS total_quantity FROM fact_order fo JOIN dim_product dp ON fo.product_id = dp.product_id WHERE dp.category = '鞋靴'"
+
+- id: r69_samsung_aov
+  query: Galaxy S24 的 Ultra 型号平均订单金额
+  suite: realistic
+  difficulty: medium
+  capabilities: [rag_column_recall, rag_metric_recall, rag_value_hybrid_recall, sql_generation]
+  tags: [value, product_name, semantic_value, average]
+  expected_columns: [fact_order.order_amount, fact_order.product_id, dim_product.product_id, dim_product.product_name]
+  expected_metrics: [AOV]
+  expected_value_bindings:
+    - {column_id: dim_product.product_name, value: Galaxy S24 Ultra}
+  oracle_sql: "SELECT AVG(fo.order_amount) AS average_order_value FROM fact_order fo JOIN dim_product dp ON fo.product_id = dp.product_id WHERE dp.product_name = 'Galaxy S24 Ultra'"
+
+- id: r70_huawei_quantity
+  query: Mate 60 的 Pro 型号一共卖出多少件
+  suite: realistic
+  difficulty: medium
+  capabilities: [rag_column_recall, rag_metric_recall, rag_value_hybrid_recall, sql_generation]
+  tags: [value, product_name, semantic_value]
+  expected_columns: [fact_order.order_quantity, fact_order.product_id, dim_product.product_id, dim_product.product_name]
+  expected_metrics: [TOTAL_QUANTITY]
+  expected_value_bindings:
+    - {column_id: dim_product.product_name, value: Mate 60 Pro}
+  oracle_sql: "SELECT SUM(fo.order_quantity) AS total_quantity FROM fact_order fo JOIN dim_product dp ON fo.product_id = dp.product_id WHERE dp.product_name = 'Mate 60 Pro'"
+
+- id: r71_ebook_reader_customers
+  query: 电子阅读器有多少位购买客户
+  suite: realistic
+  difficulty: medium
+  capabilities: [rag_column_recall, rag_metric_recall, rag_value_hybrid_recall, sql_generation]
+  tags: [value, product_name, semantic_value]
+  expected_columns: [fact_order.customer_id, fact_order.product_id, dim_product.product_id, dim_product.product_name]
+  expected_metrics: [CUSTOMER_COUNT]
+  expected_value_bindings:
+    - {column_id: dim_product.product_name, value: Kindle Paperwhite 电子书}
+  oracle_sql: "SELECT COUNT(DISTINCT fo.customer_id) AS customer_count FROM fact_order fo JOIN dim_product dp ON fo.product_id = dp.product_id WHERE dp.product_name = 'Kindle Paperwhite 电子书'"
+
+- id: r72_platinum_member_aov
+  query: 铂金会员的客单价是多少
+  suite: realistic
+  difficulty: medium
+  capabilities: [rag_column_recall, rag_metric_recall, rag_value_hybrid_recall, sql_generation]
+  tags: [value, member_level, average]
+  expected_columns: [fact_order.order_amount, fact_order.customer_id, dim_customer.customer_id, dim_customer.member_level]
+  expected_metrics: [AOV]
+  expected_value_bindings:
+    - {column_id: dim_customer.member_level, value: 铂金}
+  oracle_sql: "SELECT AVG(fo.order_amount) AS average_order_value FROM fact_order fo JOIN dim_customer dc ON fo.customer_id = dc.customer_id WHERE dc.member_level = '铂金'"
+
+- id: r73_warm_jacket_quantity
+  query: 冬季保暖外套一共售出多少件
+  suite: realistic
+  difficulty: medium
+  capabilities: [rag_column_recall, rag_metric_recall, rag_value_hybrid_recall, sql_generation]
+  tags: [value, product_name, semantic_value]
+  expected_columns: [fact_order.order_quantity, fact_order.product_id, dim_product.product_id, dim_product.product_name]
+  expected_metrics: [TOTAL_QUANTITY]
+  expected_value_bindings:
+    - {column_id: dim_product.product_name, value: 优衣库 Heattech 保暖夹克}
+  oracle_sql: "SELECT SUM(fo.order_quantity) AS total_quantity FROM fact_order fo JOIN dim_product dp ON fo.product_id = dp.product_id WHERE dp.product_name = '优衣库 Heattech 保暖夹克'"
+
+- id: r74_iphone_customer_count
+  query: iPhone 15 的 Pro 型号有多少位购买客户
+  suite: realistic
+  difficulty: medium
+  capabilities: [rag_column_recall, rag_metric_recall, rag_value_hybrid_recall, sql_generation]
+  tags: [value, product_name, semantic_value]
+  expected_columns: [fact_order.customer_id, fact_order.product_id, dim_product.product_id, dim_product.product_name]
+  expected_metrics: [CUSTOMER_COUNT]
+  expected_value_bindings:
+    - {column_id: dim_product.product_name, value: iPhone 15 Pro}
+  oracle_sql: "SELECT COUNT(DISTINCT fo.customer_id) AS customer_count FROM fact_order fo JOIN dim_product dp ON fo.product_id = dp.product_id WHERE dp.product_name = 'iPhone 15 Pro'"
+
+- id: r75_dyson_vacuum_item_price
+  query: 戴森 V15 型号无绳吸尘设备平均每件成交多少钱
+  suite: realistic
+  difficulty: medium
+  capabilities: [rag_column_recall, rag_metric_recall, rag_value_hybrid_recall, sql_generation]
+  tags: [value, product_name, semantic_value]
+  expected_columns: [fact_order.order_amount, fact_order.order_quantity, fact_order.product_id, dim_product.product_id, dim_product.product_name]
+  expected_metrics: [AVG_ITEM_PRICE]
+  expected_value_bindings:
+    - {column_id: dim_product.product_name, value: 戴森 V15 吸尘器}
+  oracle_sql: "SELECT SUM(fo.order_amount) / NULLIF(SUM(fo.order_quantity), 0) AS avg_item_price FROM fact_order fo JOIN dim_product dp ON fo.product_id = dp.product_id WHERE dp.product_name = '戴森 V15 吸尘器'"
+
+- id: r76_january_east_smartphone_quantity
+  query: 2025年1月份华东地区手机数码类的销量
+  suite: realistic
+  difficulty: hard
+  capabilities: [rag_column_recall, rag_metric_recall, rag_value_hybrid_recall, sql_generation]
+  tags: [time, value, multi_filter, region, category]
+  expected_columns: [fact_order.order_quantity, fact_order.date_id, fact_order.region_id, fact_order.product_id, dim_region.region_id, dim_region.region_name, dim_product.product_id, dim_product.category]
+  expected_metrics: [TOTAL_QUANTITY]
+  expected_value_bindings:
+    - {column_id: dim_region.region_name, value: 华东}
+    - {column_id: dim_product.category, value: 手机数码}
+  oracle_sql: "SELECT SUM(fo.order_quantity) AS total_quantity FROM fact_order fo JOIN dim_region dr ON fo.region_id = dr.region_id JOIN dim_product dp ON fo.product_id = dp.product_id WHERE fo.date_id BETWEEN 20250101 AND 20250131 AND dr.region_name = '华东' AND dp.category = '手机数码'"
+
+- id: r77_march_north_gold_item_price
+  query: 2025年3月华北地区金牌会员的平均每件成交价
+  suite: realistic
+  difficulty: hard
+  capabilities: [rag_column_recall, rag_metric_recall, rag_value_hybrid_recall, sql_generation]
+  tags: [time, month, value, multi_filter, region, member_level, semantic_value]
+  expected_columns: [fact_order.order_amount, fact_order.order_quantity, fact_order.date_id, fact_order.region_id, fact_order.customer_id, dim_region.region_id, dim_region.region_name, dim_customer.customer_id, dim_customer.member_level]
+  expected_metrics: [AVG_ITEM_PRICE]
+  expected_value_bindings:
+    - {column_id: dim_region.region_name, value: 华北}
+    - {column_id: dim_customer.member_level, value: 黄金}
+  oracle_sql: "SELECT SUM(fo.order_amount) / NULLIF(SUM(fo.order_quantity), 0) AS avg_item_price FROM fact_order fo JOIN dim_region dr ON fo.region_id = dr.region_id JOIN dim_customer dc ON fo.customer_id = dc.customer_id WHERE fo.date_id BETWEEN 20250301 AND 20250331 AND dr.region_name = '华北' AND dc.member_level = '黄金'"
+
+- id: r78_january_zhejiang_smartphone_brand_quantity
+  query: 2025年1月浙江地区智能手机和数码设备类各品牌的销量
+  suite: realistic
+  difficulty: hard
+  capabilities: [rag_column_recall, rag_metric_recall, rag_value_hybrid_recall, sql_generation]
+  tags: [time, month, value, multi_filter, province, category, brand, semantic_value]
+  expected_columns: [fact_order.order_quantity, fact_order.date_id, fact_order.region_id, fact_order.product_id, dim_region.region_id, dim_region.province, dim_product.product_id, dim_product.category, dim_product.brand]
+  expected_metrics: [TOTAL_QUANTITY]
+  expected_value_bindings:
+    - {column_id: dim_region.province, value: 浙江省}
+    - {column_id: dim_product.category, value: 手机数码}
+  oracle_sql: "SELECT dp.brand, SUM(fo.order_quantity) AS total_quantity FROM fact_order fo JOIN dim_region dr ON fo.region_id = dr.region_id JOIN dim_product dp ON fo.product_id = dp.product_id WHERE fo.date_id BETWEEN 20250101 AND 20250131 AND dr.province = '浙江省' AND dp.category = '手机数码' GROUP BY dp.brand"
+
+- id: r79_february_apple_member_metrics
+  query: 2025年2月 Apple 品牌在各会员等级的订单数和平均订单金额
+  suite: realistic
+  difficulty: hard
+  capabilities: [rag_column_recall, rag_metric_recall, rag_value_hybrid_recall, sql_generation]
+  tags: [time, month, value, multi_metric, brand, member_level, semantic_value]
+  expected_columns: [fact_order.order_id, fact_order.order_amount, fact_order.date_id, fact_order.product_id, fact_order.customer_id, dim_product.product_id, dim_product.brand, dim_customer.customer_id, dim_customer.member_level]
+  expected_metrics: [ORDER_COUNT, AOV]
+  expected_value_bindings:
+    - {column_id: dim_product.brand, value: 苹果}
+  oracle_sql: "SELECT dc.member_level, COUNT(DISTINCT fo.order_id) AS order_count, AVG(fo.order_amount) AS average_order_value FROM fact_order fo JOIN dim_product dp ON fo.product_id = dp.product_id JOIN dim_customer dc ON fo.customer_id = dc.customer_id WHERE fo.date_id BETWEEN 20250201 AND 20250228 AND dp.brand = '苹果' GROUP BY dc.member_level"
+
+- id: r80_march_south_product_quantity
+  query: 2025年3月华南地区各商品的销量
+  suite: realistic
+  difficulty: hard
+  capabilities: [rag_column_recall, rag_metric_recall, rag_value_hybrid_recall, sql_generation]
+  tags: [time, month, value, region, product, join]
+  expected_columns: [fact_order.order_quantity, fact_order.date_id, fact_order.region_id, fact_order.product_id, dim_region.region_id, dim_region.region_name, dim_product.product_id, dim_product.product_name]
+  expected_metrics: [TOTAL_QUANTITY]
+  expected_value_bindings:
+    - {column_id: dim_region.region_name, value: 华南}
+  oracle_sql: "SELECT dp.product_name, SUM(fo.order_quantity) AS total_quantity FROM fact_order fo JOIN dim_region dr ON fo.region_id = dr.region_id JOIN dim_product dp ON fo.product_id = dp.product_id WHERE fo.date_id BETWEEN 20250301 AND 20250331 AND dr.region_name = '华南' GROUP BY dp.product_name"

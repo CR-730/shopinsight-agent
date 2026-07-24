@@ -6,6 +6,9 @@ from decimal import Decimal, InvalidOperation
 from typing import Any, Literal
 
 import yaml
+from sqlglot import exp, parse_one
+
+from app.entities.value_info import build_value_candidate_id
 
 FailureStage = Literal[
     "keyword_extraction",
@@ -44,8 +47,10 @@ class EvalCase:
     risk_points: list[str] = field(default_factory=list)
     expected_sql_contains: list[str] = field(default_factory=list)
     expected_columns: list[str] = field(default_factory=list)
+    expected_retrieved_columns: list[str] | None = None
     expected_metrics: list[str] = field(default_factory=list)
     expected_values: list[str] = field(default_factory=list)
+    expected_value_bindings: list[dict[str, str]] = field(default_factory=list)
     expected_time_binding: dict[str, Any] | None = None
     expected_unresolved_binding: dict[str, Any] | None = None
     expected_semantic_plan: dict[str, Any] | None = None
@@ -63,6 +68,40 @@ class EvalCase:
     timeout_seconds: int = 300
 
     def __post_init__(self) -> None:
+        if self.oracle_sql and not self.expected_blocked_by:
+            if self.expected_sql_plan_consistent is None:
+                self.expected_sql_plan_consistent = True
+            self.capabilities = list(
+                dict.fromkeys(
+                    [
+                        *self.capabilities,
+                        "semantic_planning",
+                        "plan_consistency",
+                        "sql_validation",
+                        "tool_execution",
+                        "answer_generation",
+                    ]
+                )
+            )
+        if self.oracle_sql and self.expected_retrieved_columns is None:
+            self.expected_retrieved_columns = _retrieval_columns_from_oracle(
+                self.oracle_sql,
+                exclude_aggregate_columns=bool(self.expected_metrics),
+                recoverable_value_columns={
+                    str(binding["column_id"])
+                    for binding in self.expected_value_bindings
+                },
+            )
+        elif self.expected_retrieved_columns is None:
+            self.expected_retrieved_columns = []
+        if self.expected_value_bindings and not self.expected_values:
+            self.expected_values = [
+                build_value_candidate_id(
+                    str(binding["column_id"]),
+                    str(binding["value"]),
+                )
+                for binding in self.expected_value_bindings
+            ]
         if (
             self.expected_planning_issue is None
             and self.expected_unresolved_binding is not None
@@ -71,6 +110,56 @@ class EvalCase:
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
+
+
+def _retrieval_columns_from_oracle(
+    sql: str,
+    *,
+    exclude_aggregate_columns: bool = False,
+    recoverable_value_columns: set[str] | None = None,
+) -> list[str]:
+    """Derive query-facing column Gold while excluding physical join/time plumbing."""
+
+    statement = parse_one(sql, read="mysql")
+    aliases = {
+        table.alias_or_name: table.name for table in statement.find_all(exp.Table)
+    }
+    tables = set(aliases.values())
+    output_aliases = {
+        projection.alias for projection in statement.expressions if projection.alias
+    }
+    join_column_nodes = {
+        id(column)
+        for join in statement.find_all(exp.Join)
+        for column in (join.args.get("on") or exp.Null()).find_all(exp.Column)
+    }
+    aggregate_column_nodes = {
+        id(column)
+        for aggregate in statement.find_all(exp.AggFunc)
+        for column in aggregate.find_all(exp.Column)
+    }
+    recoverable_value_columns = recoverable_value_columns or set()
+    result: set[str] = set()
+    for column in statement.find_all(exp.Column):
+        if id(column) in join_column_nodes:
+            continue
+        if exclude_aggregate_columns and id(column) in aggregate_column_nodes:
+            continue
+        if not column.table and column.name in output_aliases:
+            continue
+        if column.table:
+            table_name = aliases.get(column.table, column.table)
+        elif len(tables) == 1:
+            table_name = next(iter(tables))
+        else:
+            continue
+        column_id = f"{table_name}.{column.name}"
+        if column_id == "fact_order.date_id":
+            continue
+        if column_id in recoverable_value_columns:
+            continue
+        result.add(column_id)
+    return sorted(result)
 
 
 @dataclass
@@ -279,12 +368,21 @@ def _evaluate_failures(case: EvalCase, trace: dict[str, Any]) -> list[EvalFailur
             )
         )
 
-    if not sql and case.expected_sql_contains:
+    expects_executed_answer = bool(case.oracle_sql and not case.expected_blocked_by)
+    if not sql and (case.expected_sql_contains or expects_executed_answer):
         failures.append(
             EvalFailure(
                 code="missing_sql",
                 message="未生成 SQL",
                 stage="sql_generation",
+            )
+        )
+    if expects_executed_answer and trace["final_answer"] is None:
+        failures.append(
+            EvalFailure(
+                code="missing_or_empty_final_answer",
+                message="Oracle 用例缺少 SQL 执行结果",
+                stage="answer_generation",
             )
         )
 
@@ -523,16 +621,29 @@ def results_match(
     expected_rows: Any,
     *,
     order_sensitive: bool,
+    ignore_column_names: bool = False,
 ) -> bool:
     """Compare exact result rows while normalizing numeric representation."""
 
     if not isinstance(actual_rows, list) or not isinstance(expected_rows, list):
         return False
-    actual = [_canonical_value(row) for row in actual_rows]
-    expected = [_canonical_value(row) for row in expected_rows]
+    actual = [
+        _canonical_result_row(row, ignore_column_names=ignore_column_names)
+        for row in actual_rows
+    ]
+    expected = [
+        _canonical_result_row(row, ignore_column_names=ignore_column_names)
+        for row in expected_rows
+    ]
     if order_sensitive:
         return actual == expected
     return sorted(actual, key=repr) == sorted(expected, key=repr)
+
+
+def _canonical_result_row(row: Any, *, ignore_column_names: bool) -> Any:
+    if ignore_column_names and isinstance(row, dict):
+        return tuple(_canonical_value(value) for value in row.values())
+    return _canonical_value(row)
 
 
 def _canonical_value(value: Any) -> Any:

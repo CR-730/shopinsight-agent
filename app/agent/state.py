@@ -80,6 +80,7 @@ class TraceState(TypedDict, total=False):
     """仅用于调试和评测的链路轨迹。"""
 
     keywords: list[str]
+    retrieval_queries: dict[str, list[str]]
     retrieved_columns: list[str]
     retrieved_metrics: list[str]
     retrieved_values: list[str]

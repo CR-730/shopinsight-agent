@@ -6,7 +6,6 @@ from langgraph.runtime import Runtime
 
 from app.agent.context import DataAgentContext
 from app.agent.retrieval_context import (
-    extract_retrieval_keywords,
     merge_retrieved_context,
     recall_column_context,
     recall_metric_context,
@@ -26,9 +25,6 @@ async def context_builder(state: DataAgentState, runtime: Runtime[DataAgentConte
         current_state, runtime.context
     )
     current_state.update(sql_memory_update)
-
-    keyword_update = await extract_retrieval_keywords(current_state)
-    current_state.update(keyword_update)
 
     column_update, value_update, metric_update = await asyncio.gather(
         recall_column_context(current_state, runtime.context),
@@ -54,7 +50,16 @@ async def context_builder(state: DataAgentState, runtime: Runtime[DataAgentConte
                 "metrics": merge_update.get("metric_infos") or [],
             },
             "trace": {
-                "keywords": keyword_update.get("keywords") or [],
+                "keywords": _unique_strings(
+                    column_update.get("column_retrieval_queries") or [],
+                    value_update.get("value_retrieval_queries") or [],
+                    metric_update.get("metric_retrieval_queries") or [],
+                ),
+                "retrieval_queries": {
+                    "columns": column_update.get("column_retrieval_queries") or [],
+                    "metrics": metric_update.get("metric_retrieval_queries") or [],
+                    "values": value_update.get("value_retrieval_queries") or [],
+                },
                 "retrieved_columns": _entity_ids(
                     column_update.get("retrieved_column_infos") or []
                 ),
@@ -84,3 +89,7 @@ def _metric_names(items) -> list[str]:
         for item in items
         if str(getattr(item, "name", item))
     ]
+
+
+def _unique_strings(*groups: list[str]) -> list[str]:
+    return list(dict.fromkeys(item for group in groups for item in group if item))

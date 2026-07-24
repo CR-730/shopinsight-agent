@@ -37,8 +37,8 @@ from app.evaluation.cases import (
     EvalCase,
     evaluate_case,
     load_eval_cases,
-    results_match,
 )
+from app.evaluation.endpoint_correctness import score_endpoint_result
 from app.repositories.es.value_es_repository import ValueESRepository
 from app.repositories.mysql.dw.dw_mysql_repository import DWMySQLRepository
 from app.repositories.mysql.meta.meta_mysql_repository import MetaMySQLRepository
@@ -52,15 +52,17 @@ ALL_CAPABILITIES = {
     "rag_metric_recall",
     "rag_value_hybrid_recall",
     "context_filter",
+    "semantic_planning",
     "sql_generation",
     "sql_validation",
     "plan_consistency",
     "sql_correction_loop",
     "tool_execution",
+    "answer_generation",
     "safety",
 }
 
-ALL_SCENARIOS = {"smoke", "regression", "adversarial", "realistic"}
+ALL_SCENARIOS = {"smoke", "regression", "adversarial", "realistic", "safety"}
 
 
 async def run_eval(
@@ -68,6 +70,9 @@ async def run_eval(
     output_path: Path | None = None,
     *,
     repeat: int = 1,
+    case_ids: set[str] | None = None,
+    limit: int | None = None,
+    resume: bool = False,
 ) -> int:
     if repeat < 1:
         raise ValueError("repeat must be a positive integer")
@@ -82,8 +87,20 @@ async def run_eval(
     dw_mysql_client_manager.init()
 
     try:
-        cases = load_eval_cases(cases_path)
-        results = []
+        cases = _select_eval_cases(
+            load_eval_cases(cases_path),
+            case_ids=case_ids,
+            limit=limit,
+        )
+        results = (
+            _load_completed_eval_results(output_path)
+            if resume and output_path is not None
+            else []
+        )
+        completed_runs = {
+            (str(item.get("case_id")), int(item.get("repeat_index") or 0))
+            for item in results
+        }
         async with (
             meta_mysql_client_manager.session_factory() as meta_session,
             dw_mysql_client_manager.session_factory() as dw_session,
@@ -105,6 +122,12 @@ async def run_eval(
 
             for case in cases:
                 for repeat_index in range(repeat):
+                    if (case.id, repeat_index) in completed_runs:
+                        print(
+                            f"Running eval case: {case.id} "
+                            f"repeat {repeat_index} - resumed"
+                        )
+                        continue
                     case_payload = await _run_case(
                         case,
                         repositories,
@@ -113,16 +136,32 @@ async def run_eval(
                     if (
                         case.oracle_sql
                         and not case.expected_blocked_by
-                        and (case_payload.get("trace") or {}).get("final_answer")
-                        is not None
                     ):
-                        oracle_rows = await _run_oracle(
+                        oracle_rows, oracle_full_rows = await _run_oracle(
                             case,
                             repositories["dw_mysql_repository"],
                         )
-                        _score_oracle_result(case_payload, case, oracle_rows)
+                        _score_oracle_result(
+                            case_payload,
+                            case,
+                            oracle_rows,
+                            oracle_full_rows=oracle_full_rows,
+                        )
+                    elif case.expected_blocked_by:
+                        _score_expected_block(case_payload, case)
                     case_payload["repeat_index"] = repeat_index
                     results.append(case_payload)
+                    if output_path is not None:
+                        _write_json_report(
+                            output_path,
+                            {
+                                "partial": True,
+                                "started_at": started_at,
+                                "cases_path": str(cases_path),
+                                "repeat": repeat,
+                                "results": results,
+                            },
+                        )
 
         finished_at = _now_iso()
         total_latency_seconds = round(time.perf_counter() - started, 3)
@@ -140,6 +179,7 @@ async def run_eval(
             "cases_path": str(cases_path),
             "git_commit": _git_commit(),
             "model": app_config.llm.model,
+            "fast_model": app_config.llm.fast_model,
             "summary": summary,
             "repeat": repeat,
             "repeat_summary": summarize_repeat_results(results),
@@ -154,13 +194,7 @@ async def run_eval(
         }
 
         if output_path is not None:
-            output_path.parent.mkdir(parents=True, exist_ok=True)
-            output_path.write_text(
-                json.dumps(
-                    payload, ensure_ascii=False, indent=2, default=_json_default
-                ),
-                encoding="utf-8",
-            )
+            _write_json_report(output_path, payload)
 
         print(json.dumps(payload, ensure_ascii=False, indent=2, default=_json_default))
         return 0 if passed == len(results) else 1
@@ -257,9 +291,18 @@ async def _run_case(
     return payload
 
 
-async def _run_oracle(case: EvalCase, dw_repository) -> list[dict[str, Any]]:
+async def _run_oracle(
+    case: EvalCase,
+    dw_repository,
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]] | None]:
     sql = _validated_oracle_sql(case.oracle_sql or "")
-    return await dw_repository.run(sql)
+    rows = await dw_repository.run(sql)
+    if not case.order_sensitive:
+        return rows, None
+    full_sql = _validated_oracle_sql_without_limit(case.oracle_sql or "")
+    if full_sql == sql:
+        return rows, None
+    return rows, await dw_repository.run(full_sql)
 
 
 def _validated_oracle_sql(sql: str) -> str:
@@ -269,23 +312,40 @@ def _validated_oracle_sql(sql: str) -> str:
     return statements[0].sql(dialect="mysql")
 
 
+def _validated_oracle_sql_without_limit(sql: str) -> str:
+    statements = parse(sql, read="mysql")
+    if len(statements) != 1 or not isinstance(statements[0], exp.Select):
+        raise ValueError("oracle_sql must be one read-only SELECT statement")
+    statement = statements[0]
+    statement.set("limit", None)
+    statement.set("offset", None)
+    return statement.sql(dialect="mysql")
+
+
 def _score_oracle_result(
     payload: dict[str, Any],
     case: EvalCase,
     oracle_rows: list[dict[str, Any]],
+    *,
+    oracle_full_rows: list[dict[str, Any]] | None = None,
 ) -> None:
     agent_rows = (payload.get("trace") or {}).get("final_answer")
-    plan_has_order = bool(
-        ((payload.get("trace") or {}).get("semantic_plan") or {}).get("order_by")
+    generated_sql = str(
+        (payload.get("trace") or {}).get("generated_sql") or ""
     )
-    matched = results_match(
-        agent_rows,
-        oracle_rows,
-        order_sensitive=case.order_sensitive or plan_has_order,
+    score = score_endpoint_result(
+        case,
+        generated_sql=generated_sql,
+        actual_rows=agent_rows,
+        oracle_rows=oracle_rows,
+        oracle_full_rows=oracle_full_rows,
     )
-    payload["oracle_result_match"] = matched
+    payload["oracle_result_match"] = score.correct
+    payload["endpoint_correct"] = score.correct
+    payload["endpoint_score_reason"] = score.reason
+    payload["endpoint_score_details"] = score.details
     payload["oracle_rows"] = oracle_rows
-    if matched:
+    if score.correct:
         return
     payload["passed"] = False
     payload["failure_stage"] = payload.get("failure_stage") or "answer_generation"
@@ -446,6 +506,54 @@ def _now_iso() -> str:
     return datetime.now(UTC).replace(microsecond=0).isoformat()
 
 
+def _select_eval_cases(
+    cases: list[EvalCase],
+    *,
+    case_ids: set[str] | None,
+    limit: int | None,
+) -> list[EvalCase]:
+    selected = [
+        case for case in cases if not case_ids or case.id in case_ids
+    ]
+    return selected[:limit] if limit is not None else selected
+
+
+def _load_completed_eval_results(output_path: Path) -> list[dict[str, Any]]:
+    if not output_path.exists():
+        return []
+    try:
+        payload = json.loads(output_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return []
+    return [
+        item
+        for item in payload.get("results", [])
+        if item.get("case_id") and item.get("repeat_index") is not None
+    ]
+
+
+def _write_json_report(output_path: Path, payload: dict[str, Any]) -> None:
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2, default=_json_default),
+        encoding="utf-8",
+    )
+
+
+def _score_expected_block(payload: dict[str, Any], case: EvalCase) -> None:
+    trace = payload.get("trace") or {}
+    score = score_endpoint_result(
+        case,
+        generated_sql=str(trace.get("generated_sql") or ""),
+        actual_rows=trace.get("final_answer"),
+        oracle_rows=[],
+        blocked_by=trace.get("blocked_by"),
+    )
+    payload["endpoint_correct"] = score.correct
+    payload["endpoint_score_reason"] = score.reason
+    payload["endpoint_score_details"] = score.details
+
+
 def _git_commit() -> str | None:
     try:
         return subprocess.check_output(
@@ -476,6 +584,13 @@ if __name__ == "__main__":
         default=1,
         help="每条用例独立重复执行次数",
     )
+    parser.add_argument(
+        "--ids",
+        default="",
+        help="Comma-separated case ids for a focused run",
+    )
+    parser.add_argument("--limit", type=int)
+    parser.add_argument("--resume", action="store_true")
     args = parser.parse_args()
     raise SystemExit(
         asyncio.run(
@@ -483,6 +598,9 @@ if __name__ == "__main__":
                 cases_path=Path(args.cases),
                 output_path=Path(args.output) if args.output else None,
                 repeat=args.repeat,
+                case_ids={item for item in args.ids.split(",") if item} or None,
+                limit=args.limit,
+                resume=args.resume,
             )
         )
     )

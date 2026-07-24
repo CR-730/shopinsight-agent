@@ -15,7 +15,6 @@ from app.agent.llm import llm
 from app.agent.llm_usage import ainvoke_llm_with_usage
 from app.agent.memory import (
     SQL_TOOL_NAME,
-    build_retrieval_query,
     tool_memory_results_to_examples,
 )
 from app.agent.state import (
@@ -49,9 +48,7 @@ async def recall_sql_memory_context(
         return {"sql_memory_examples": []}
 
     try:
-        memory_query = build_retrieval_query(
-            state["query"], state.get("conversation_messages") or []
-        )
+        memory_query = state["query"]
         results = await context["agent_memory_repository"].search_similar_usage(
             memory_query,
             user_id=user_id,
@@ -68,9 +65,9 @@ async def recall_sql_memory_context(
 
 
 async def extract_retrieval_keywords(state: DataAgentState) -> dict[str, list[str]]:
-    query = build_retrieval_query(
-        state["query"], state.get("conversation_messages") or []
-    )
+    """Extract the jieba baseline queries used by retrieval evaluation A."""
+
+    query = state["query"]
     allow_pos = (
         "n",
         "nr",
@@ -86,17 +83,24 @@ async def extract_retrieval_keywords(state: DataAgentState) -> dict[str, list[st
         "l",
     )
     keywords = jieba.analyse.extract_tags(query, allowPOS=allow_pos)
-    keywords = list(set(keywords + [query]))
+    keywords = list(dict.fromkeys([query, *keywords]))
     logger.info(f"抽取关键词成功: {keywords}")
     return {"keywords": keywords}
 
 
+def build_route_retrieval_queries(query: str, expanded: Any) -> list[str]:
+    """Build one route's queries from the full question and LLM domain terms."""
+
+    return list(
+        dict.fromkeys([query.strip(), *normalize_keyword_list(expanded)])
+    )
+
+
 async def recall_column_context(
     state: DataAgentState, context: dict[str, Any]
-) -> dict[str, list[ColumnInfo]]:
+) -> dict[str, list]:
     step = "召回字段信息"
     query = state["query"]
-    keywords = state["keywords"]
     column_qdrant_repository = context["column_qdrant_repository"]
     embedding_client = context["embedding_client"]
 
@@ -106,7 +110,7 @@ async def recall_column_context(
         step=step,
         context=context,
     )
-    keywords = sorted(set(normalize_keyword_list(keywords) + result))
+    keywords = build_route_retrieval_queries(query, result)
     ranked_lists: list[RankedList[ColumnInfo]] = []
     for keyword in keywords:
         embedding = await _embed_keyword(keyword, step, embedding_client, context)
@@ -122,17 +126,19 @@ async def recall_column_context(
     fused = fuse_candidate_rankings(
         ranked_lists,
         candidate_id_of=lambda item: item.id,
-        limit=20,
+        limit=app_config.agent.retrieval_candidate_limit,
     )
-    return {"retrieved_column_infos": [candidate.item for candidate in fused]}
+    return {
+        "retrieved_column_infos": [candidate.item for candidate in fused],
+        "column_retrieval_queries": keywords,
+    }
 
 
 async def recall_metric_context(
     state: DataAgentState, context: dict[str, Any]
-) -> dict[str, list[MetricInfo]]:
+) -> dict[str, list]:
     step = "召回指标信息"
     query = state["query"]
-    keywords = state["keywords"]
     embedding_client = context["embedding_client"]
     metric_qdrant_repository = context["metric_qdrant_repository"]
 
@@ -142,7 +148,7 @@ async def recall_metric_context(
         step=step,
         context=context,
     )
-    keywords = sorted(set(normalize_keyword_list(keywords) + result))
+    keywords = build_route_retrieval_queries(query, result)
     ranked_lists: list[RankedList[MetricInfo]] = []
     for keyword in keywords:
         embedding = await _embed_keyword(keyword, step, embedding_client, context)
@@ -158,22 +164,24 @@ async def recall_metric_context(
     fused = fuse_candidate_rankings(
         ranked_lists,
         candidate_id_of=lambda item: item.id,
-        limit=20,
+        limit=app_config.agent.retrieval_candidate_limit,
     )
     metric_infos = [candidate.item for candidate in fused]
     logger.info(f"检索到指标信息：{[item.id for item in metric_infos]}")
-    return {"retrieved_metric_infos": metric_infos}
+    return {
+        "retrieved_metric_infos": metric_infos,
+        "metric_retrieval_queries": keywords,
+    }
 
 
 async def recall_value_context(
     state: DataAgentState, context: dict[str, Any]
-) -> dict[str, list[ValueInfo]]:
+) -> dict[str, list]:
     if _ablation_options(context).get("disable_value_recall"):
         return {"retrieved_value_infos": []}
 
     step = "召回字段取值"
     query = state["query"]
-    keywords = state["keywords"]
     value_es_repository = context["value_es_repository"]
     value_qdrant_repository = context["value_qdrant_repository"]
     embedding_client = context["embedding_client"]
@@ -184,7 +192,7 @@ async def recall_value_context(
         step=step,
         context=context,
     )
-    keywords = sorted(set(normalize_keyword_list(keywords) + result))
+    keywords = build_route_retrieval_queries(query, result)
     ranked_lists: list[RankedList[ValueInfo]] = []
     for keyword in keywords:
         if _ablation_options(context).get("disable_value_es"):
@@ -229,9 +237,15 @@ async def recall_value_context(
             )
         )
 
-    value_infos = fuse_value_rankings(ranked_lists, limit=20)
+    value_infos = fuse_value_rankings(
+        ranked_lists,
+        limit=app_config.agent.retrieval_candidate_limit,
+    )
     logger.info(f"检索到字段取值：{[item.id for item in value_infos]}")
-    return {"retrieved_value_infos": value_infos}
+    return {
+        "retrieved_value_infos": value_infos,
+        "value_retrieval_queries": keywords,
+    }
 
 
 async def merge_retrieved_context(
@@ -274,16 +288,16 @@ async def merge_retrieved_context(
         key_columns: list[
             ColumnInfo
         ] = await meta_mysql_repository.get_key_columns_by_table_id(table_id)
-        column_ids = [
-            column_info.id for column_info in table_to_columns_map[table_id]
-        ]
+        column_ids = [column_info.id for column_info in table_to_columns_map[table_id]]
         for key_column in key_columns:
             if key_column.id not in column_ids:
                 table_to_columns_map[table_id].append(key_column)
 
     table_infos: list[TableInfoState] = []
     for table_id, column_infos in table_to_columns_map.items():
-        table_info: TableInfo = await meta_mysql_repository.get_table_info_by_id(table_id)
+        table_info: TableInfo = await meta_mysql_repository.get_table_info_by_id(
+            table_id
+        )
         table_infos.append(
             TableInfoState(
                 name=table_info.name,
@@ -314,7 +328,9 @@ async def merge_retrieved_context(
     ]
 
     logger.info(f"合并后的表信息：{[table_info['name'] for table_info in table_infos]}")
-    logger.info(f"合并后的指标信息：{[metric_info['name'] for metric_info in metric_infos]}")
+    logger.info(
+        f"合并后的指标信息：{[metric_info['name'] for metric_info in metric_infos]}"
+    )
     return {"table_infos": table_infos, "metric_infos": metric_infos}
 
 
@@ -342,7 +358,9 @@ async def _extend_keywords(
     return normalize_keyword_list(result)
 
 
-async def _embed_keyword(keyword: str, step: str, embedding_client, context: dict[str, Any]):
+async def _embed_keyword(
+    keyword: str, step: str, embedding_client, context: dict[str, Any]
+):
     started_at = time.perf_counter()
     embedding = await ainvoke_with_timeout(
         _embed_query(keyword, embedding_client, context),

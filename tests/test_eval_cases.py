@@ -4,6 +4,7 @@ from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
 
+from app.entities.value_info import build_value_candidate_id
 from app.evaluation.cases import (
     EvalCase,
     build_trace,
@@ -11,7 +12,13 @@ from app.evaluation.cases import (
     load_eval_cases,
     results_match,
 )
-from app.scripts.run_eval import ALL_CAPABILITIES, _infer_exception_stage
+from app.scripts.run_eval import (
+    ALL_CAPABILITIES,
+    _infer_exception_stage,
+    _load_completed_eval_results,
+    _select_eval_cases,
+    _validated_oracle_sql_without_limit,
+)
 
 run_eval_module = importlib.import_module("app.scripts.run_eval")
 
@@ -102,6 +109,78 @@ def test_evaluate_case_passes_when_sql_and_context_match():
     assert result.trace["time_binding"]["grain"] == "quarter"
     assert result.trace["time_binding"]["year"] == 2025
     assert "mysql.dw.execute" in result.trace["tool_calls"]
+
+
+def test_eval_case_derives_value_candidate_ids_from_canonical_bindings():
+    case = EvalCase(
+        id="value_binding",
+        query="统计华北销售额",
+        expected_value_bindings=[
+            {
+                "column_id": "dim_region.region_name",
+                "value": "华北",
+            }
+        ],
+    )
+
+    assert case.expected_values == [
+        build_value_candidate_id("dim_region.region_name", "华北")
+    ]
+
+
+def test_eval_case_derives_retrieval_columns_without_join_or_time_keys():
+    case = EvalCase(
+        id="retrieval-ground-truth",
+        query="2025年1月按地区统计销售额",
+        expected_columns=[
+            "fact_order.order_amount",
+            "fact_order.date_id",
+            "fact_order.region_id",
+            "dim_region.region_id",
+            "dim_region.region_name",
+        ],
+        expected_metrics=["GMV"],
+        oracle_sql=(
+            "SELECT dr.region_name, SUM(fo.order_amount) AS sales_amount "
+            "FROM fact_order fo "
+            "JOIN dim_region dr ON fo.region_id = dr.region_id "
+            "WHERE fo.date_id BETWEEN 20250101 AND 20250131 "
+            "GROUP BY dr.region_name"
+        ),
+    )
+
+    assert case.expected_retrieved_columns == ["dim_region.region_name"]
+    assert case.expected_sql_plan_consistent is True
+    assert {
+        "semantic_planning",
+        "plan_consistency",
+        "sql_validation",
+        "tool_execution",
+        "answer_generation",
+    } <= set(case.capabilities)
+
+
+def test_eval_case_preserves_explicit_empty_retrieval_column_gold():
+    case = EvalCase(
+        id="retrieval-no-double-counting",
+        query="上海市订单金额大于1000元的销售额",
+        expected_metrics=["GMV"],
+        expected_retrieved_columns=[],
+        expected_value_bindings=[
+            {
+                "column_id": "dim_region.province",
+                "value": "上海市",
+            }
+        ],
+        oracle_sql=(
+            "SELECT SUM(fo.order_amount) AS sales_amount "
+            "FROM fact_order fo "
+            "JOIN dim_region dr ON fo.region_id = dr.region_id "
+            "WHERE dr.province = '上海市' AND fo.order_amount > 1000"
+        ),
+    )
+
+    assert case.expected_retrieved_columns == []
 
 
 def test_evaluate_case_checks_expected_unresolved_binding():
@@ -476,6 +555,70 @@ def test_exact_result_normalizes_decimal_float_and_row_order():
     assert results_match(actual, expected, order_sensitive=True) is False
 
 
+def test_oracle_result_comparison_can_ignore_equivalent_output_aliases():
+    actual = [{"gmv": Decimal("100.00")}]
+    expected = [{"sales_amount": 100}]
+
+    assert results_match(actual, expected, order_sensitive=False) is False
+    assert (
+        results_match(
+            actual,
+            expected,
+            order_sensitive=False,
+            ignore_column_names=True,
+        )
+        is True
+    )
+
+
+def test_eval_case_selection_supports_ids_and_limit():
+    cases = [
+        EvalCase(id="r01", query="a"),
+        EvalCase(id="r02", query="b"),
+        EvalCase(id="r03", query="c"),
+    ]
+
+    selected = _select_eval_cases(cases, case_ids={"r03", "r01"}, limit=1)
+
+    assert [case.id for case in selected] == ["r01"]
+
+
+def test_load_completed_eval_results_supports_resume(tmp_path):
+    output = tmp_path / "partial.json"
+    output.write_text(
+        """
+        {
+          "results": [
+            {"case_id": "r01", "repeat_index": 0},
+            {"case_id": "r01", "repeat_index": 1}
+          ]
+        }
+        """,
+        encoding="utf-8",
+    )
+
+    results = _load_completed_eval_results(output)
+
+    assert [(item["case_id"], item["repeat_index"]) for item in results] == [
+        ("r01", 0),
+        ("r01", 1),
+    ]
+
+
+def test_oracle_full_result_sql_removes_only_limit_and_offset():
+    sql = (
+        "SELECT region_name, SUM(order_amount) AS gmv "
+        "FROM fact_order JOIN dim_region USING (region_id) "
+        "GROUP BY region_name ORDER BY gmv DESC LIMIT 5 OFFSET 2"
+    )
+
+    result = _validated_oracle_sql_without_limit(sql)
+
+    assert "LIMIT" not in result.upper()
+    assert "OFFSET" not in result.upper()
+    assert "ORDER BY" in result.upper()
+
+
 def test_nonempty_wrong_result_fails_exact_comparison():
     case = EvalCase(
         id="exact",
@@ -490,6 +633,27 @@ def test_nonempty_wrong_result_fails_exact_comparison():
     result = evaluate_case(case, state)
 
     assert "exact_result_mismatch" in {item.code for item in result.failures}
+
+
+def test_oracle_case_requires_generated_sql_and_execution_rows():
+    case = EvalCase(
+        id="oracle-gate",
+        query="统计销售额",
+        oracle_sql="SELECT SUM(order_amount) AS sales_amount FROM fact_order",
+    )
+    state = {
+        "trace": {"keywords": ["销售额"]},
+        "semantic_plan": {
+            "measures": [{"metric_id": "GMV"}],
+            "required_column_ids": ["fact_order.order_amount"],
+        },
+    }
+
+    result = evaluate_case(case, state)
+
+    assert {"missing_sql", "missing_or_empty_final_answer"} <= {
+        item.code for item in result.failures
+    }
 
 
 def test_eval_loads_legacy_unresolved_expectation_temporarily(tmp_path):

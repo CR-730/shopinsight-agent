@@ -26,7 +26,7 @@ db_dw:
 qdrant:
   host: localhost
   port: 6333
-  embedding_size: 1536
+  embedding_size: 1024
 
 es:
   host: localhost
@@ -37,6 +37,7 @@ agent:
   max_sql_correction_attempts: 2
   embedding_timeout_seconds: 30
   retrieval_timeout_seconds: 30
+  retrieval_candidate_limit: 5
   sql_execution_timeout_seconds: 60
   value_hybrid_es_weight: 1.2
   value_hybrid_vector_weight: 1.0
