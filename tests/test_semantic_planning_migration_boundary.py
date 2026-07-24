@@ -32,6 +32,7 @@ def test_node_writes_only_the_semantic_plan_contract():
 def test_readme_documents_only_the_canonical_node():
     readme = (ROOT / "README.md").read_text(encoding="utf-8-sig")
 
-    assert "上下文构建 → 语义规划 → 上下文压缩" in readme
+    assert "意图识别 → 上下文构建 → 语义规划 → SQL 生成 → SQL 校验执行" in readme
     assert "semantic_planning/" in readme
+    assert "上下文压缩" not in readme
     assert LEGACY_PACKAGE not in readme
